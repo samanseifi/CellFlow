@@ -1,0 +1,23 @@
+# Ignore NumPy archive files
+*.npz
+
+# Ignore PNG images
+*.png
+
+# Python package leftovers
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+*.manifest
+*.spec
+
+# Virtual environment folders
+venv/
+env/
+ENV/
+.venv/
