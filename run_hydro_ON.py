@@ -7,8 +7,8 @@ np.random.seed(42) # Use any integer you like, but use the same one for both scr
 if __name__ == "__main__":
     config = {
         'dt': 0.01,
-        'physical_size': 300.0,
-        'grid_resolution': 300,
+        'physical_size': 3000.0,
+        'grid_resolution': 3000,
         'num_cells': 10, # Starting with fewer cells gives them more room to grow and move
 
         # --- SIMULATION BEHAVIOR FIXES ---
@@ -37,7 +37,7 @@ if __name__ == "__main__":
     sim = CellSimulation(config, config_name='Hydro_ON')
     
     start_time = time.time()
-    sim.run_simulation(steps=10000, save_interval=50)
+    sim.run_simulation(steps=100000, save_interval=100)
     end_time = time.time()
 
     print(f"\nMain simulation completed in {end_time - start_time:.2f} seconds")

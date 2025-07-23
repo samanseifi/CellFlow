@@ -171,6 +171,81 @@ def update_fluid_velocity_numba(fluid_velocity, positions, forces, viscosity, dx
     return fluid_velocity
 
 @njit(parallel=True)
+def update_fluid_velocity_with_dipoles_numba(fluid_velocity, positions, monopolar_forces, propulsive_forces, orientations, cell_dipole_lengths, viscosity, dx):
+    """
+    Calculates fluid velocity using regularized Stokeslets for monopolar forces
+    and regularized Stokes dipoles for propulsive (swimming) forces.
+    """
+    h, w, _ = fluid_velocity.shape
+    num_cells = len(positions)
+    eps = 2.0 * dx  # Regularization parameter
+    eps2 = eps * eps
+    pref = 1.0 / (8.0 * np.pi * viscosity)
+
+    for gy in prange(h):
+        for gx in range(w):
+            xg = gx * dx
+            yg = gy * dx
+            vx_total, vy_total = 0.0, 0.0
+
+            # Loop over each cell to sum its contribution
+            for k in range(num_cells):
+                px_k, py_k = positions[k, 0], positions[k, 1]
+
+                # --- Part 1: Monopolar forces (adhesion, repulsion, etc.) ---
+                f_mono_x, f_mono_y = monopolar_forces[k, 0], monopolar_forces[k, 1]
+                if f_mono_x != 0.0 or f_mono_y != 0.0:
+                    rx = xg - px_k
+                    ry = yg - py_k
+                    r2 = rx*rx + ry*ry
+                    r_reg_inv = 1.0 / np.sqrt(r2 + eps2)
+                    r_reg_inv3 = r_reg_inv * r_reg_inv * r_reg_inv
+                    f_dot_r = f_mono_x * rx + f_mono_y * ry
+                    
+                    vx_total += f_dot_r * rx * r_reg_inv3 + f_mono_x * r_reg_inv
+                    vy_total += f_dot_r * ry * r_reg_inv3 + f_mono_y * r_reg_inv
+
+                # --- Part 2: Propulsive dipole (swimming force) ---
+                f_prop_mag = np.sqrt(propulsive_forces[k,0]**2 + propulsive_forces[k,1]**2)
+                if f_prop_mag > 1e-9:
+                    # Unit vector for the swimming direction
+                    ux, uy = orientations[k, 0], orientations[k, 1]
+                    
+                    # Effective length of the dipole (e.g., cell radius)
+                    L = cell_dipole_lengths[k]
+                    
+                    # Position of the front (+F) and back (-F) poles of the dipole
+                    pos_front = np.array([px_k + 0.5 * L * ux, py_k + 0.5 * L * uy])
+                    pos_back = np.array([px_k - 0.5 * L * ux, py_k - 0.5 * L * uy])
+
+                    # Contribution from the front pole (+F)
+                    rx_f = xg - pos_front[0]
+                    ry_f = yg - pos_front[1]
+                    r2_f = rx_f*rx_f + ry_f*ry_f
+                    r_reg_inv_f = 1.0 / np.sqrt(r2_f + eps2)
+                    r_reg_inv3_f = r_reg_inv_f * r_reg_inv_f * r_reg_inv_f
+                    f_dot_r_f = (f_prop_mag * ux) * rx_f + (f_prop_mag * uy) * ry_f
+                    
+                    vx_total += f_dot_r_f * rx_f * r_reg_inv3_f + (f_prop_mag * ux) * r_reg_inv_f
+                    vy_total += f_dot_r_f * ry_f * r_reg_inv3_f + (f_prop_mag * uy) * r_reg_inv_f
+
+                    # Contribution from the back pole (-F)
+                    rx_b = xg - pos_back[0]
+                    ry_b = yg - pos_back[1]
+                    r2_b = rx_b*rx_b + ry_b*ry_b
+                    r_reg_inv_b = 1.0 / np.sqrt(r2_b + eps2)
+                    r_reg_inv3_b = r_reg_inv_b * r_reg_inv_b * r_reg_inv_b
+                    f_dot_r_b = (-f_prop_mag * ux) * rx_b + (-f_prop_mag * uy) * ry_b
+
+                    vx_total += f_dot_r_b * rx_b * r_reg_inv3_b + (-f_prop_mag * ux) * r_reg_inv_b
+                    vy_total += f_dot_r_b * ry_b * r_reg_inv3_b + (-f_prop_mag * uy) * r_reg_inv_b
+
+            fluid_velocity[gy, gx, 0] = pref * vx_total
+            fluid_velocity[gy, gx, 1] = pref * vy_total
+
+    return fluid_velocity
+
+@njit(parallel=True)
 def smoothly_damp_velocity_inside_cells_numba(velocity, positions, radii, dx):
     """
     Smoothly dampens the velocity to zero inside cells using a tanh function,
@@ -390,6 +465,10 @@ class CellSimulation:
         self.repulsion_strength = config['repulsion_strength']
         self.cell_mobility = config['cell_mobility']
         self.division_force_strength = config.get('division_force_strength', 10.0)
+        
+        self.hydrodynamics_model = config.get('hydrodynamics_model', 'monopole')
+        print(f"INFO: Using '{self.hydrodynamics_model}' model for hydrodynamics.")
+        
                 # --- MODULAR INITIALIZATION ---
         setup_type = config.get('initial_setup_type', 'central_uniform')
         initializer_func = INITIALIZER_MAP.get(setup_type)
@@ -623,37 +702,3 @@ class CellSimulation:
             final_fluid_velocity=self.fluid_velocity,
             config=self.config
         )
-
-
-
-
-# cfg = dict(dt=0.01, domain_size=(200,200), num_cells=1,
-#            viscosity=5.0, nutrient_D=0, attractant_D=0,
-#            adhesion_strength=0, adhesion_cutoff_factor=2.0, repulsion_strength=0,
-#            chi_nutrient=0, chi_attractant=0, walk_speed=0,
-#            cell_mobility=1, enable_biology=False)
-
-# sim = CellSimulation(cfg, 'oneshot')
-# sim.cells[0].radius = 3.0
-# F = np.array([1.0, 0.0])                       # 1 N in +x
-
-# prop = np.zeros((1, 2))
-# prop[0] = F
-# sim.fluid_velocity[:] = 0.0
-# sim.fluid_velocity = update_fluid_velocity_numba(
-#         sim.fluid_velocity,
-#         np.array([sim.cells[0].position]),
-#         np.array([sim.cells[0].radius]),
-#         prop, sim.viscosity, sim.dx)
-
-# # pick a point r = 40 Δx directly to the right of the cell
-# r_phys = 40 * sim.dx
-# gx     = int(sim.cells[0].position[0] / sim.dx + 40)
-# gy     = int(sim.cells[0].position[1] / sim.dx)
-# u_num  = sim.fluid_velocity[gy, gx, 0]
-# u_ref  = F[0] / (4 * np.pi * sim.viscosity * r_phys)
-
-# rel_err = abs(u_num / u_ref - 1.0)
-# print("relative error:", rel_err)
-# assert rel_err < 0.05, "Stokeslet kernel inaccurate!"
-# print("PASS")
