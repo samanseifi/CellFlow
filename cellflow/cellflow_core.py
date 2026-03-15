@@ -7,13 +7,13 @@ import imageio
 
 # --- Numba-optimized Helper Functions ---
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def diffuse_field_numba(field, D, dt, dx):
     """Generic function to diffuse any 2D field with no-flux boundaries."""
     new_field = np.copy(field)
     diffusion_factor = D * dt / (dx**2)
     for i in prange(1, field.shape[0] - 1):
-        for j in prange(1, field.shape[1] - 1):
+        for j in range(1, field.shape[1] - 1):
             laplacian = (field[i-1, j] + field[i+1, j] +
                          field[i, j-1] + field[i, j+1] - 4 * field[i, j])
             new_field[i, j] += diffusion_factor * laplacian
@@ -21,7 +21,7 @@ def diffuse_field_numba(field, D, dt, dx):
                 new_field[i, j] = 0
     return new_field
 
-@njit
+@njit(cache=True)
 def absorb_nutrient_numba(position, radius, nutrient_to_modify, nutrient_to_read, dt, consumption_rate, dx):
     """Calculates nutrient uptake over the entire area of the cell."""
     total_uptake = 0.0
@@ -44,7 +44,7 @@ def absorb_nutrient_numba(position, radius, nutrient_to_modify, nutrient_to_read
                     total_uptake += uptake
     return total_uptake
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def advect_scalar_field_numba(field, velocity, dt, dx):
     """Advects a scalar field using backward tracing and bilinear interpolation."""
     ny, nx = field.shape
@@ -54,7 +54,7 @@ def advect_scalar_field_numba(field, velocity, dt, dx):
     dt_div_dx = dt / dx
 
     for j in prange(ny):
-        for i in prange(nx):
+        for i in range(nx):
             # Back-trace position in grid-index coordinates
             x = i - velocity[j, i, 0] * dt_div_dx
             y = j - velocity[j, i, 1] * dt_div_dx
@@ -84,7 +84,7 @@ def advect_scalar_field_numba(field, velocity, dt, dx):
     return new_f
 
 
-@njit
+@njit(cache=True)
 def secrete_over_area_numba(position, radius, attractant_field, total_secretion_amount, dx):
     """Distributes secreted attractant over the entire area of the cell."""
     x_center_idx, y_center_idx = int(position[0] / dx), int(position[1] / dx)
@@ -102,7 +102,7 @@ def secrete_over_area_numba(position, radius, attractant_field, total_secretion_
                 if 0 <= y < attractant_field.shape[0] and 0 <= x < attractant_field.shape[1]:
                     attractant_field[y, x] += secretion_per_point
 
-@njit
+@njit(cache=True)
 def sample_field_at_cell_numba(position, radius, field, dx):
     """Averages a field (scalar or vector) over the area of a cell."""
     x_center_idx, y_center_idx = int(position[0] / dx), int(position[1] / dx)
@@ -129,14 +129,21 @@ def sample_field_at_cell_numba(position, radius, field, dx):
             return field[y_center_idx, x_center_idx, :] if is_vector_field else field[y_center_idx, x_center_idx]
         return np.zeros(field.shape[2]) if is_vector_field else 0.0
 
-@njit(parallel=True)
-def update_fluid_velocity_numba(fluid_velocity, positions, forces, viscosity, dx):
-    """Calculates fluid velocity using the regularized Stokeslet (monopole) model."""
+@njit(parallel=True, cache=True)
+def update_fluid_velocity_numba(fluid_velocity, positions, forces, viscosity, dx,
+                                 cutoff_radius=-1.0):
+    """Calculates fluid velocity using the regularized Stokeslet (monopole) model.
+
+    cutoff_radius: If > 0, skip contributions from cells farther than this physical
+                   distance (approximate but faster for concentrated cell clusters).
+    """
     h, w, _ = fluid_velocity.shape
     n = len(positions)
     eps = 2.0 * dx      # Regularization parameter
     eps2 = eps * eps
     pref = 1.0 / (8.0 * np.pi * viscosity)
+    use_cutoff = cutoff_radius > 0.0
+    cutoff2 = cutoff_radius * cutoff_radius
 
     for gy in prange(h):
         for gx in range(w):
@@ -151,6 +158,9 @@ def update_fluid_velocity_numba(fluid_velocity, positions, forces, viscosity, dx
                 rx = xg - px
                 ry = yg - py
                 r2 = rx*rx + ry*ry
+
+                if use_cutoff and r2 > cutoff2:
+                    continue
 
                 # Regularized denominators
                 r_reg_inv = 1.0 / np.sqrt(r2 + eps2)
@@ -170,17 +180,25 @@ def update_fluid_velocity_numba(fluid_velocity, positions, forces, viscosity, dx
 
     return fluid_velocity
 
-@njit(parallel=True)
-def update_fluid_velocity_with_dipoles_numba(fluid_velocity, positions, monopolar_forces, propulsive_forces, orientations, cell_dipole_lengths, viscosity, dx):
+@njit(parallel=True, cache=True)
+def update_fluid_velocity_with_dipoles_numba(fluid_velocity, positions, monopolar_forces,
+                                              propulsive_forces, orientations,
+                                              cell_dipole_lengths, viscosity, dx,
+                                              cutoff_radius=-1.0):
     """
     Calculates fluid velocity using regularized Stokeslets for monopolar forces
     and regularized Stokes dipoles for propulsive (swimming) forces.
+
+    cutoff_radius: If > 0, skip cells farther than this physical distance from a
+                   grid point (approximate but faster for concentrated cell clusters).
     """
     h, w, _ = fluid_velocity.shape
     num_cells = len(positions)
     eps = 2.0 * dx  # Regularization parameter
     eps2 = eps * eps
     pref = 1.0 / (8.0 * np.pi * viscosity)
+    use_cutoff = cutoff_radius > 0.0
+    cutoff2 = cutoff_radius * cutoff_radius
 
     for gy in prange(h):
         for gx in range(w):
@@ -192,18 +210,22 @@ def update_fluid_velocity_with_dipoles_numba(fluid_velocity, positions, monopola
             for k in range(num_cells):
                 px_k, py_k = positions[k, 0], positions[k, 1]
 
+                # Fast distance pre-check to skip distant cells
+                rx_k = xg - px_k
+                ry_k = yg - py_k
+                r2_k = rx_k * rx_k + ry_k * ry_k
+                if use_cutoff and r2_k > cutoff2:
+                    continue
+
                 # --- Part 1: Monopolar forces (adhesion, repulsion, etc.) ---
                 f_mono_x, f_mono_y = monopolar_forces[k, 0], monopolar_forces[k, 1]
                 if f_mono_x != 0.0 or f_mono_y != 0.0:
-                    rx = xg - px_k
-                    ry = yg - py_k
-                    r2 = rx*rx + ry*ry
-                    r_reg_inv = 1.0 / np.sqrt(r2 + eps2)
+                    r_reg_inv = 1.0 / np.sqrt(r2_k + eps2)
                     r_reg_inv3 = r_reg_inv * r_reg_inv * r_reg_inv
-                    f_dot_r = f_mono_x * rx + f_mono_y * ry
+                    f_dot_r = f_mono_x * rx_k + f_mono_y * ry_k
                     
-                    vx_total += f_dot_r * rx * r_reg_inv3 + f_mono_x * r_reg_inv
-                    vy_total += f_dot_r * ry * r_reg_inv3 + f_mono_y * r_reg_inv
+                    vx_total += f_dot_r * rx_k * r_reg_inv3 + f_mono_x * r_reg_inv
+                    vy_total += f_dot_r * ry_k * r_reg_inv3 + f_mono_y * r_reg_inv
 
                 # --- Part 2: Propulsive dipole (swimming force) ---
                 f_prop_mag = np.sqrt(propulsive_forces[k,0]**2 + propulsive_forces[k,1]**2)
@@ -245,7 +267,7 @@ def update_fluid_velocity_with_dipoles_numba(fluid_velocity, positions, monopola
 
     return fluid_velocity
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def smoothly_damp_velocity_inside_cells_numba(velocity, positions, radii, dx):
     """
     Smoothly dampens the velocity to zero inside cells using a tanh function,
@@ -282,7 +304,7 @@ def smoothly_damp_velocity_inside_cells_numba(velocity, positions, radii, dx):
                 velocity[j, i, 0] *= smoothing_factor
                 velocity[j, i, 1] *= smoothing_factor
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def zero_velocity_inside_cells_numba(velocity, positions, radii, dx):
     ny, nx, _ = velocity.shape
     for idx in prange(len(positions)):
@@ -305,40 +327,136 @@ def zero_velocity_inside_cells_numba(velocity, positions, radii, dx):
                     velocity[j, i, 0] = 0.0
                     velocity[j, i, 1] = 0.0
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def calculate_adhesion_forces_numba(positions, radii, adhesion_strength, adhesion_cutoff_factor):
+    """Compute pairwise adhesion forces. Each row i accumulates forces from all
+    other cells, so the outer prange loop is race-free (each thread owns its own i)."""
     num_cells = len(positions)
     adhesion_forces = np.zeros((num_cells, 2))
     for i in prange(num_cells):
-        for j in prange(i + 1, num_cells):
-            delta = positions[j] - positions[i]
-            distance = np.linalg.norm(delta)
+        for j in range(num_cells):
+            if j == i:
+                continue
+            dx_ = positions[j, 0] - positions[i, 0]
+            dy_ = positions[j, 1] - positions[i, 1]
+            distance = np.sqrt(dx_**2 + dy_**2)
             touching_dist = radii[i] + radii[j]
             cutoff_dist = touching_dist * adhesion_cutoff_factor
             if touching_dist < distance < cutoff_dist:
                 force_magnitude = adhesion_strength * (distance - touching_dist)
-                direction = delta / distance
-                adhesion_forces[i] += force_magnitude * direction
-                adhesion_forces[j] -= force_magnitude * direction
+                inv_dist = 1.0 / distance
+                adhesion_forces[i, 0] += force_magnitude * dx_ * inv_dist
+                adhesion_forces[i, 1] += force_magnitude * dy_ * inv_dist
     return adhesion_forces
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def calculate_repulsion_forces_numba(positions, radii, repulsion_strength):
+    """Compute pairwise repulsion forces. Each row i accumulates forces from all
+    other cells, so the outer prange loop is race-free (each thread owns its own i)."""
     num_cells = len(positions)
     repulsion_forces = np.zeros((num_cells, 2))
     for i in prange(num_cells):
-        for j in prange(i + 1, num_cells):
-            delta = positions[j] - positions[i]
-            dist  = np.sqrt(delta[0]**2 + delta[1]**2)
+        for j in range(num_cells):
+            if j == i:
+                continue
+            dx_ = positions[j, 0] - positions[i, 0]
+            dy_ = positions[j, 1] - positions[i, 1]
+            dist = np.sqrt(dx_**2 + dy_**2)
             touch = radii[i] + radii[j]
             if 0.0 < dist < touch:
                 overlap = touch - dist
-                # --- new: exponentially stiff wall ----------------
                 force_mag = repulsion_strength * np.exp(3.0 * overlap / touch)
-                dir_vec   = delta / dist
-                repulsion_forces[i] -= force_mag * dir_vec
-                repulsion_forces[j] += force_mag * dir_vec
+                inv_dist = 1.0 / dist
+                repulsion_forces[i, 0] -= force_mag * dx_ * inv_dist
+                repulsion_forces[i, 1] -= force_mag * dy_ * inv_dist
     return repulsion_forces
+
+
+@njit(cache=True)
+def _sample_scalar_field_numba(position, radius, field, dx):
+    """Averages a 2D scalar field over the circular area of a cell.
+    Helper used inside parallel batch functions."""
+    x_center_idx = int(position[0] / dx)
+    y_center_idx = int(position[1] / dx)
+    r_idx = int(np.ceil(radius / dx))
+
+    total_value = 0.0
+    num_points = 0
+
+    for i in range(-r_idx, r_idx + 1):
+        for j in range(-r_idx, r_idx + 1):
+            dist_sq = (i * dx)**2 + (j * dx)**2
+            if dist_sq <= radius**2:
+                y, x = y_center_idx + i, x_center_idx + j
+                if 0 <= y < field.shape[0] and 0 <= x < field.shape[1]:
+                    total_value += field[y, x]
+                    num_points += 1
+
+    if num_points > 0:
+        return total_value / num_points
+    if 0 <= y_center_idx < field.shape[0] and 0 <= x_center_idx < field.shape[1]:
+        return field[y_center_idx, x_center_idx]
+    return 0.0
+
+
+@njit(parallel=True, cache=True)
+def calculate_propulsion_forces_numba(positions, radii, grad_x_field, grad_y_field,
+                                       chi_nutrient, walk_speed, max_propulsive_force, dx):
+    """Computes chemotactic propulsion forces for all cells in parallel.
+
+    Replaces the sequential Python loop in _calculate_forces so that
+    gradient-field sampling for each cell is done concurrently.
+
+    Note: Numba's parallel mode gives each thread its own independent RNG
+    state, so np.random.randn() calls here are thread-safe. The simulation
+    is intentionally stochastic (random walk), matching the original behaviour.
+    """
+    num_cells = len(positions)
+    forces = np.zeros((num_cells, 2))
+
+    for i in prange(num_cells):
+        avg_grad_x = _sample_scalar_field_numba(positions[i], radii[i], grad_x_field, dx)
+        avg_grad_y = _sample_scalar_field_numba(positions[i], radii[i], grad_y_field, dx)
+
+        force_dir_x = chi_nutrient * avg_grad_x + walk_speed * np.random.randn()
+        force_dir_y = chi_nutrient * avg_grad_y + walk_speed * np.random.randn()
+
+        norm = np.sqrt(force_dir_x**2 + force_dir_y**2)
+        if norm > 0.0:
+            forces[i, 0] = (force_dir_x / norm) * max_propulsive_force
+            forces[i, 1] = (force_dir_y / norm) * max_propulsive_force
+
+    return forces
+
+
+@njit(cache=True)
+def resolve_overlaps_numba(positions, radii):
+    """Resolve pairwise overlaps between cells in-place.
+
+    Sequentially processes all pairs; positions are modified directly so the
+    caller only needs a simple write-back loop to update Cell objects.
+    """
+    n = len(positions)
+    for a in range(n):
+        for b in range(a + 1, n):
+            dx_ = positions[b, 0] - positions[a, 0]
+            dy_ = positions[b, 1] - positions[a, 1]
+            dist = np.sqrt(dx_**2 + dy_**2)
+            touch = radii[a] + radii[b]
+            if dist < 1e-12:
+                shift_x = 0.5 * touch * np.random.randn()
+                shift_y = 0.5 * touch * np.random.randn()
+                positions[a, 0] -= shift_x
+                positions[a, 1] -= shift_y
+                positions[b, 0] += shift_x
+                positions[b, 1] += shift_y
+            elif dist < touch:
+                overlap = touch - dist
+                inv_dist = 1.0 / dist
+                positions[a, 0] -= 0.5 * overlap * dx_ * inv_dist
+                positions[a, 1] -= 0.5 * overlap * dy_ * inv_dist
+                positions[b, 0] += 0.5 * overlap * dx_ * inv_dist
+                positions[b, 1] += 0.5 * overlap * dy_ * inv_dist
 
 
 # --- Cell Definition ---
@@ -468,6 +586,12 @@ class CellSimulation:
         
         self.hydrodynamics_model = config.get('hydrodynamics_model', 'monopole')
         print(f"INFO: Using '{self.hydrodynamics_model}' model for hydrodynamics.")
+
+        # Optional spatial cutoff for Stokeslet calculations.
+        # Set to a positive physical distance to skip far-field contributions and
+        # speed up fluid velocity updates (useful for concentrated cell clusters).
+        # A value of -1.0 (default) disables the cutoff for maximum accuracy.
+        self.stokeslet_cutoff = float(config.get('stokeslet_cutoff', -1.0))
         
                 # --- MODULAR INITIALIZATION ---
         setup_type = config.get('initial_setup_type', 'central_uniform')
@@ -489,31 +613,15 @@ class CellSimulation:
             os.makedirs(self.output_dir)
 
     # --- NEW: Helper method to calculate all forces ---
-    def _calculate_forces(self):
-        cell_positions = np.array([cell.position for cell in self.cells])
-        radii = np.array([cell.radius for cell in self.cells])
-        
-        # Propulsion (Constant Force Model)
-        propulsion_forces = np.zeros((len(self.cells), 2))
+    def _calculate_forces(self, cell_positions, radii):
+        # Propulsion (Constant Force Model) — computed in parallel via Numba
         grad_nutrient_y, grad_nutrient_x = np.gradient(self.nutrient_field, self.dx)
-        for i, cell in enumerate(self.cells):
-            # The chemotaxis and random walk terms now define a desired DIRECTION, not a velocity.
-            avg_grad_x = sample_field_at_cell_numba(cell.position, cell.radius, grad_nutrient_x, self.dx)
-            avg_grad_y = sample_field_at_cell_numba(cell.position, cell.radius, grad_nutrient_y, self.dx)
-            
-            # This vector's direction is where the cell wants to go.
-            force_direction_vec = self.chi_nutrient * np.array([avg_grad_x, avg_grad_y]) + \
-                                  self.walk_speed * np.random.randn(2)
-            
-            # Normalize to get a pure direction (a unit vector)
-            norm = np.linalg.norm(force_direction_vec)
-            if norm > 0:
-                unit_vec = force_direction_vec / norm
-            else:
-                unit_vec = np.zeros(2) # No force if no direction
-            
-            # Apply the cell's maximum propulsive force in the desired direction.
-            propulsion_forces[i] = unit_vec * self.config['max_propulsive_force']
+        propulsion_forces = calculate_propulsion_forces_numba(
+            cell_positions, radii,
+            grad_nutrient_x, grad_nutrient_y,
+            self.chi_nutrient, self.walk_speed,
+            self.config['max_propulsive_force'], self.dx
+        )
 
         # Inter-cell forces (these remain the same)
         adhesion_forces = calculate_adhesion_forces_numba(cell_positions, radii, self.adhesion_strength, self.adhesion_cutoff_factor)
@@ -542,27 +650,31 @@ class CellSimulation:
         if not self.cells:
             return
 
-        # 1. Calculate all forces acting on the cells
+        # 1. Build cell arrays once — shared by force calculation, fluid update, and position update
         cell_positions = np.array([cell.position for cell in self.cells])
         radii = np.array([cell.radius for cell in self.cells])
-        total_forces_on_cells = self._calculate_forces()
+
+        # 2. Calculate all forces acting on the cells
+        total_forces_on_cells = self._calculate_forces(cell_positions, radii)
         total_forces_on_fluid = self.cell_mobility * total_forces_on_cells
 
-        # 2. Update fluid velocity using the new forces (with the corrected Stokeslet function)
-        self.fluid_velocity = update_fluid_velocity_numba(self.fluid_velocity, cell_positions, total_forces_on_fluid, self.viscosity, self.dx)
+        # 3. Update fluid velocity using the new forces (with the corrected Stokeslet function)
+        self.fluid_velocity = update_fluid_velocity_numba(
+            self.fluid_velocity, cell_positions, total_forces_on_fluid,
+            self.viscosity, self.dx, self.stokeslet_cutoff
+        )
         # zero_velocity_inside_cells_numba(self.fluid_velocity, cell_positions, radii, self.dx)
-        # In _simulation_step method
         smoothly_damp_velocity_inside_cells_numba(self.fluid_velocity, cell_positions, radii, self.dx)
 
-        # 3. Advect scalar fields using the new velocity field
+        # 4. Advect scalar fields using the new velocity field
         self.nutrient_field = advect_scalar_field_numba(self.nutrient_field, self.fluid_velocity, self.dt, self.dx)
         self.attractant_field = advect_scalar_field_numba(self.attractant_field, self.fluid_velocity, self.dt, self.dx)
         
-        # 4. Diffuse scalar fields
+        # 5. Diffuse scalar fields
         self.nutrient_field = diffuse_field_numba(self.nutrient_field, self.nutrient_D, self.dt, self.dx)
         self.attractant_field = diffuse_field_numba(self.attractant_field, self.attractant_D, self.dt, self.dx)
 
-        # 5. Update cell biology (consumption, growth) and position
+        # 6. Update cell biology (consumption, growth) and position
         nutrient_to_read = np.copy(self.nutrient_field)
         for i, cell in enumerate(self.cells):
             # Consumption/secretion happen AFTER advection/diffusion
@@ -586,7 +698,7 @@ class CellSimulation:
             cell.velocity = self.cell_mobility * v_active + v_advection
             cell.position += cell.velocity * self.dt
         
-        # 6. Handle division and cleanup
+        # 7. Handle division and cleanup
         self._handle_division_and_death()
         self._resolve_overlaps()
         self._enforce_boundaries()
@@ -606,21 +718,11 @@ class CellSimulation:
         self.cells = [c for c in self.cells if c.alive]
 
     def _resolve_overlaps(self):
-        for a in range(len(self.cells)):
-            for b in range(a + 1, len(self.cells)):
-                ca, cb = self.cells[a], self.cells[b]
-                delta = cb.position - ca.position
-                dist = np.linalg.norm(delta)
-                touch = ca.radius + cb.radius
-                if dist < 1e-12:
-                    shift = 0.5 * touch * np.random.randn(2)
-                    ca.position -= shift
-                    cb.position += shift
-                elif dist < touch:
-                    overlap = touch - dist
-                    dir_vec = delta / dist
-                    ca.position -= 0.5 * overlap * dir_vec
-                    cb.position += 0.5 * overlap * dir_vec
+        cell_positions = np.array([cell.position for cell in self.cells])
+        radii = np.array([cell.radius for cell in self.cells])
+        resolve_overlaps_numba(cell_positions, radii)
+        for i, cell in enumerate(self.cells):
+            cell.position = cell_positions[i].copy()
 
     def _enforce_boundaries(self):
         for cell in self.cells:
