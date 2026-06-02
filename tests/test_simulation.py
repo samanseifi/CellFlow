@@ -89,6 +89,27 @@ def test_unknown_setup_type_raises(in_tmp_dir):
         CellSimulation(_base_config(initial_setup_type='does_not_exist'), config_name='bad')
 
 
+def test_brinkman_fft_fluid_model_runs(in_tmp_dir):
+    """The Brinkman/IBM fluid path runs end-to-end and stays finite, with cells
+    moving with the same field that advects the scalars."""
+    np.random.seed(7)
+    sim = CellSimulation(
+        _base_config(fluid_model='brinkman_fft', viscosity=1.0,
+                     brinkman_screening_length=10.0),
+        config_name='brinkman',
+    )
+    assert sim.fluid_model == 'brinkman_fft'
+    assert sim.brinkman_alpha > 0.0
+    sim.run_simulation(steps=8, save_interval=100)
+
+    positions = np.array([c.position for c in sim.cells])
+    assert len(sim.cells) > 0
+    assert np.all(np.isfinite(positions))
+    assert np.all(np.isfinite(sim.fluid_velocity))
+    # Brinkman velocity field is finite everywhere (no ln(r) blow-up).
+    assert np.max(np.abs(sim.fluid_velocity)) < 1e6
+
+
 def test_backward_compat_import():
     """The old monolithic import path must still resolve to the same class."""
     from cellflow.cellflow_core import CellSimulation as Legacy

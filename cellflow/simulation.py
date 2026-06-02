@@ -17,6 +17,8 @@ from .kernels.stokeslet import (
     update_fluid_velocity_with_dipoles_numba,
     compute_cell_velocities_numba,
 )
+from .fluid.brinkman_fft import solve_velocity, alpha_from_screening_length
+from .fluid.ibm import spread_forces_numba, interpolate_velocity_numba
 from . import visualization
 from . import io
 
@@ -55,6 +57,26 @@ class CellSimulation:
 
         self.hydrodynamics_model = config.get('hydrodynamics_model', 'monopole')
         print(f"INFO: Using '{self.hydrodynamics_model}' model for hydrodynamics.")
+
+        # Fluid solver: 'stokeslet' (legacy free-space 2D Stokeslet sum, default)
+        # or 'brinkman_fft' (FFT Brinkman solver + Immersed Boundary coupling).
+        # The Brinkman path moves cells with the same velocity field that advects
+        # the scalar fields and adds a substrate-drag screening length that
+        # regularizes the 2D Stokes paradox.
+        self.fluid_model = config.get('fluid_model', 'stokeslet')
+        if self.fluid_model == 'brinkman_fft':
+            # Screening length delta = sqrt(mu/alpha); default to a few grid cells'
+            # worth of dish so interactions stay confined.
+            self.brinkman_screening_length = float(
+                config.get('brinkman_screening_length', 10.0 * self.dx)
+            )
+            self.brinkman_alpha = alpha_from_screening_length(
+                self.viscosity, self.brinkman_screening_length
+            )
+            print(f"INFO: Fluid solver = Brinkman/FFT+IBM "
+                  f"(screening length = {self.brinkman_screening_length:.3g}).")
+        else:
+            print(f"INFO: Fluid solver = '{self.fluid_model}' (legacy Stokeslet).")
 
         # Optional spatial cutoff for Stokeslet calculations.
         # Set to a positive physical distance to skip far-field contributions and
@@ -142,9 +164,25 @@ class CellSimulation:
 
         # 3. Compute fluid velocity on the grid (for scalar field advection).
         #    Stokes flow is instantaneous — velocity is fully determined by
-        #    the current force distribution, so we zero the field first.
-        self.fluid_velocity[:] = 0.0
-        if self.hydrodynamics_model == 'dipole':
+        #    the current force distribution.
+        #    For the Brinkman/IBM path the cell velocities come from the SAME
+        #    solved field (computed here); the legacy Stokeslet path computes
+        #    cell velocities separately in step 8.
+        precomputed_cell_velocities = None
+        if self.fluid_model == 'brinkman_fft':
+            force_density = spread_forces_numba(
+                cell_positions, total_forces,
+                self.grid_resolution, self.grid_resolution, self.dx
+            )
+            self.fluid_velocity = solve_velocity(
+                force_density, mu=self.viscosity, dx=self.dx,
+                alpha=self.brinkman_alpha,
+            )
+            precomputed_cell_velocities = interpolate_velocity_numba(
+                self.fluid_velocity, cell_positions, self.dx
+            )
+        elif self.hydrodynamics_model == 'dipole':
+            self.fluid_velocity[:] = 0.0
             orientations = np.zeros_like(propulsion_forces)
             norms = np.linalg.norm(propulsion_forces, axis=1)
             mask = norms > 1e-12
@@ -156,6 +194,7 @@ class CellSimulation:
                 self.viscosity, self.dx, self.stokeslet_cutoff
             )
         else:
+            self.fluid_velocity[:] = 0.0
             update_fluid_velocity_numba(
                 self.fluid_velocity, cell_positions, total_forces,
                 self.viscosity, self.dx, self.stokeslet_cutoff
@@ -203,9 +242,14 @@ class CellSimulation:
         # 8. Compute cell velocities via mobility relation:
         #    v_k = F_k/(6*pi*mu*R_k) + sum_{j!=k} G(x_k,x_j).F_j
         #    Self-mobility uses Stokes drag; interactions use 2D Stokeslet.
-        cell_velocities = compute_cell_velocities_numba(
-            cell_positions, total_forces, radii, self.viscosity, self.dx
-        )
+        #    (Brinkman/IBM cell velocities were interpolated from the fluid in
+        #    step 3 — reuse them so cells move with the field they advect.)
+        if precomputed_cell_velocities is not None:
+            cell_velocities = precomputed_cell_velocities
+        else:
+            cell_velocities = compute_cell_velocities_numba(
+                cell_positions, total_forces, radii, self.viscosity, self.dx
+            )
         for i, cell in enumerate(self.cells):
             cell.velocity = cell_velocities[i]
             cell.position += cell.velocity * self.dt
