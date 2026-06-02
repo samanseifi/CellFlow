@@ -12,6 +12,7 @@ from .kernels.forces import (
     calculate_propulsion_forces_numba,
     resolve_overlaps_numba,
 )
+from .kernels.adhesion import calculate_differential_adhesion_forces_numba
 from .kernels.stokeslet import (
     update_fluid_velocity_numba,
     update_fluid_velocity_with_dipoles_numba,
@@ -50,7 +51,8 @@ class CellSimulation:
         self.chi_attractant = config['chi_attractant']
         self.walk_speed = config['walk_speed']
         self.viscosity = config['viscosity']
-        self.adhesion_strength = config['adhesion_strength']
+        # Scalar adhesion strength (unused when an 'adhesion_matrix' is supplied).
+        self.adhesion_strength = config.get('adhesion_strength', 0.0)
         self.adhesion_cutoff_factor = config['adhesion_cutoff_factor']
         self.repulsion_strength = config['repulsion_strength']
         self.division_force_strength = config.get('division_force_strength', 10.0)
@@ -95,6 +97,20 @@ class CellSimulation:
         self.cells, self.nutrient_field = initializer_func(config, self.physical_size, self.grid_resolution)
         # ----------------------------
 
+        # --- Differential adhesion (optional) ---
+        # If 'adhesion_matrix' is provided (KxK), adhesion strength is looked up
+        # per cell-type pair and drives sorting/pattern formation; otherwise the
+        # scalar 'adhesion_strength' is used for all pairs.
+        self.adhesion_matrix = None
+        if 'adhesion_matrix' in config:
+            self.adhesion_matrix = np.asarray(config['adhesion_matrix'], dtype=np.float64)
+            if self.adhesion_matrix.ndim != 2 or \
+               self.adhesion_matrix.shape[0] != self.adhesion_matrix.shape[1]:
+                raise ValueError("adhesion_matrix must be a square (K x K) array.")
+            self._assign_cell_types(config)
+            print(f"INFO: Differential adhesion ON "
+                  f"({self.adhesion_matrix.shape[0]} cell types).")
+
         self.attractant_field = np.zeros((self.grid_resolution, self.grid_resolution))
         self.fluid_velocity = np.zeros((self.grid_resolution, self.grid_resolution, 2))
 
@@ -111,6 +127,28 @@ class CellSimulation:
             print(f"WARNING: Diffusion stability number = {diffusion_number:.4f} > 0.25. "
                   f"Explicit scheme may be unstable. Reduce dt or increase dx.")
 
+    def _assign_cell_types(self, config):
+        """Assign integer cell types for differential adhesion.
+
+        config['cell_type_assignment']:
+          'random' (default) — sample types using optional 'cell_type_fractions'.
+          'left_right'        — type 0 on the left half of the dish, type 1 on
+                                the right (useful for sorting at a wound).
+        """
+        k = self.adhesion_matrix.shape[0]
+        assignment = config.get('cell_type_assignment', 'random')
+        if assignment == 'left_right':
+            mid = self.physical_size / 2.0
+            for cell in self.cells:
+                cell.cell_type = 0 if cell.position[0] < mid else 1
+        else:
+            fractions = config.get('cell_type_fractions')
+            if fractions is not None:
+                fractions = np.asarray(fractions, dtype=np.float64)
+                fractions = fractions / fractions.sum()
+            for cell in self.cells:
+                cell.cell_type = int(np.random.choice(k, p=fractions))
+
     def _calculate_forces(self, cell_positions, radii):
         """Calculate all forces on cells, returned as (propulsion, monopolar) components.
 
@@ -126,9 +164,16 @@ class CellSimulation:
             self.config['max_propulsive_force'], self.dx
         )
 
-        adhesion_forces = calculate_adhesion_forces_numba(
-            cell_positions, radii, self.adhesion_strength, self.adhesion_cutoff_factor
-        )
+        if self.adhesion_matrix is not None:
+            types = np.array([cell.cell_type for cell in self.cells], dtype=np.int64)
+            adhesion_forces = calculate_differential_adhesion_forces_numba(
+                cell_positions, radii, types, self.adhesion_matrix,
+                self.adhesion_cutoff_factor
+            )
+        else:
+            adhesion_forces = calculate_adhesion_forces_numba(
+                cell_positions, radii, self.adhesion_strength, self.adhesion_cutoff_factor
+            )
         repulsion_forces = calculate_repulsion_forces_numba(
             cell_positions, radii, self.repulsion_strength
         )

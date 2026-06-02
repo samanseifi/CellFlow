@@ -17,6 +17,7 @@ from .forces import (
     calculate_propulsion_forces_numba,
     resolve_overlaps_numba,
 )
+from .adhesion import calculate_differential_adhesion_forces_numba
 
 __all__ = [
     "diffuse_field_numba",
@@ -32,4 +33,5 @@ __all__ = [
     "calculate_repulsion_forces_numba",
     "calculate_propulsion_forces_numba",
     "resolve_overlaps_numba",
+    "calculate_differential_adhesion_forces_numba",
 ]

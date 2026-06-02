@@ -7,10 +7,11 @@ from .kernels.fields import absorb_nutrient_numba, secrete_over_area_numba
 class Cell:
     next_id = 0
 
-    def __init__(self, position, nutrient=20.0, just_divided_timer=0):
+    def __init__(self, position, nutrient=20.0, just_divided_timer=0, cell_type=0):
         self.id = Cell.next_id
         Cell.next_id += 1
         self.position = np.array(position, dtype=np.float64)
+        self.cell_type = cell_type
         self.nutrient_accumulated = nutrient
         self.consumption_rate = np.random.normal(0.2, 0.05)
         self.secretion_rate = 1.0
@@ -52,7 +53,9 @@ class Cell:
             self.update_radius()
             self.just_divided_timer = 5
 
-            daughter = Cell(self.position + np.random.randn(2) * self.radius, self.nutrient_accumulated, just_divided_timer=5)
+            daughter = Cell(self.position + np.random.randn(2) * self.radius,
+                            self.nutrient_accumulated, just_divided_timer=5,
+                            cell_type=self.cell_type)
 
             self.division_partner_id = daughter.id
             daughter.division_partner_id = self.id
