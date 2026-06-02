@@ -144,16 +144,23 @@ Adhesion / patterns:
 
 ## 5. Phased delivery
 
-- **Phase 0 — cleanup (low risk):** remove dead damping kernels, unify the
-  self-mobility, document `ε`. (Touches #3.)
-- **Phase 1 — FFT Brinkman solver:** `fluid/brinkman_fft.py` + analytic tests.
-  Standalone, no cell coupling yet.
-- **Phase 2 — IBM coupling:** spreading/interpolation; wire as opt-in
-  `fluid_model='brinkman_fft'`; one shared `u`. Screening + consistency tests.
-- **Phase 3 — differential adhesion:** cell types + Morse matrix; Laplace +
-  sorting tests.
-- **Phase 4 — performance & config:** neighbor lists (#7), optional pyfftw,
-  fold all new params into the config schema (#6).
+- **[DONE] Phase 0 — cleanup:** removed the dead in-cell velocity-damping
+  kernels. (Self-mobility unification deferred to keep the legacy default path
+  numerically unchanged; the corrected physics lives in the Brinkman path.)
+- **[DONE] Phase 1 — FFT Brinkman solver:** `fluid/brinkman_fft.py` + 7 tests
+  (analytic eigenfunction, divergence-free, screening monotonicity, ...).
+- **[DONE] Phase 2 — IBM coupling:** `fluid/ibm.py` (Peskin 4-point spread /
+  interpolate); opt-in `fluid_model='brinkman_fft'` with one shared velocity
+  field. Adjoint + conservation + smoke tests.
+- **[DONE] Phase 3 — differential adhesion:** `cell_type` + `kernels/adhesion.py`
+  with a `D[type_i, type_j]` matrix. **Deviation from §2.4:** the force law is the
+  legacy linear-in-separation band (so a uniform matrix exactly reproduces the
+  old kernel) rather than a Morse potential; revisit if a calibrated, smooth
+  well is needed. Sorting test confirms like-type clustering over time.
+- **Phase 4 — performance & config (TODO):** neighbor lists (#7), optional
+  pyfftw, fold all new params into the config schema (#6). The O(N^2) adhesion/
+  repulsion loops and the legacy O(grid^2 * N) Stokeslet remain the bottlenecks;
+  the Brinkman path is already O(M log M).
 
 ## 6. Open questions
 
