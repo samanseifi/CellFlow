@@ -4,6 +4,9 @@
 # Ignore PNG images
 *.png
 
+# Test / tooling caches
+.pytest_cache/
+
 # Python package leftovers
 __pycache__/
 *.pyc
