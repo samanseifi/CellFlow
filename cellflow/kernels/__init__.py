@@ -10,8 +10,6 @@ from .stokeslet import (
     update_fluid_velocity_numba,
     update_fluid_velocity_with_dipoles_numba,
     compute_cell_velocities_numba,
-    smoothly_damp_velocity_inside_cells_numba,
-    zero_velocity_inside_cells_numba,
 )
 from .forces import (
     calculate_adhesion_forces_numba,
@@ -30,8 +28,6 @@ __all__ = [
     "update_fluid_velocity_numba",
     "update_fluid_velocity_with_dipoles_numba",
     "compute_cell_velocities_numba",
-    "smoothly_damp_velocity_inside_cells_numba",
-    "zero_velocity_inside_cells_numba",
     "calculate_adhesion_forces_numba",
     "calculate_repulsion_forces_numba",
     "calculate_propulsion_forces_numba",
