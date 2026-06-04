@@ -59,9 +59,15 @@ class Cell:
             self.update_radius()
             self.just_divided_timer = 5
 
-            daughter = Cell(self.position + np.random.randn(2) * self.radius,
-                            self.nutrient_accumulated, just_divided_timer=5,
-                            cell_type=self.cell_type)
+            # Place the daughter just *touching* the parent (separation = sum of
+            # radii) along a random direction, rather than a zero-mean Gaussian
+            # offset that would bury it inside the parent (issue #21).
+            d = np.random.randn(2)
+            norm = np.sqrt(d[0] ** 2 + d[1] ** 2)
+            direction = d / norm if norm > 1e-9 else np.array([1.0, 0.0])
+            daughter = Cell(self.position.copy(), self.nutrient_accumulated,
+                            just_divided_timer=5, cell_type=self.cell_type)
+            daughter.position = self.position + direction * (self.radius + daughter.radius)
             daughter.polarity = self.polarity     # inherit orientation
 
             self.division_partner_id = daughter.id

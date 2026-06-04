@@ -78,6 +78,10 @@ class CellSimulation:
         # same forces as the brute-force O(N^2) kernels (to ~1e-10) but scales
         # near-linearly. On by default; set False to force brute force.
         self.use_neighbor_list = bool(config.get('use_neighbor_list', True))
+
+        # Overlap-resolution sweeps per step. More sweeps relax dense/just-divided
+        # packings faster, reducing transient overlaps after division (issue #21).
+        self.overlap_iterations = int(config.get('overlap_iterations', 3))
         self.adhesion_cutoff_factor = config['adhesion_cutoff_factor']
         self.repulsion_strength = config['repulsion_strength']
         self.division_force_strength = config.get('division_force_strength', 10.0)
@@ -424,7 +428,8 @@ class CellSimulation:
     def _resolve_overlaps(self):
         cell_positions = np.array([cell.position for cell in self.cells])
         radii = np.array([cell.radius for cell in self.cells])
-        resolve_overlaps_numba(cell_positions, radii)
+        for _ in range(self.overlap_iterations):
+            resolve_overlaps_numba(cell_positions, radii)
         for i, cell in enumerate(self.cells):
             cell.position = cell_positions[i].copy()
 
