@@ -12,7 +12,7 @@ def setup_central_uniform(config, physical_size, grid_resolution):
     """Initializes cells in a cluster at the center."""
     nutrient_field = np.ones((grid_resolution, grid_resolution)) * config.get('nutrient_bc_value', 20.0)
     center = physical_size / 2
-    initial_cluster_radius = 20.0
+    initial_cluster_radius = config.get('initial_cluster_radius', 20.0)
     Cell.next_id = 0
     cells = [Cell(np.array([center, center]) + np.random.randn(2) * initial_cluster_radius) for _ in range(config['num_cells'])]
     return cells, nutrient_field
