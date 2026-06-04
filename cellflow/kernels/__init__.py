@@ -18,6 +18,12 @@ from .forces import (
     resolve_overlaps_numba,
 )
 from .adhesion import calculate_differential_adhesion_forces_numba
+from .neighbors import (
+    build_cell_list_numba,
+    repulsion_forces_celllist_numba,
+    adhesion_forces_celllist_numba,
+    differential_adhesion_celllist_numba,
+)
 
 __all__ = [
     "diffuse_field_numba",
@@ -34,4 +40,8 @@ __all__ = [
     "calculate_propulsion_forces_numba",
     "resolve_overlaps_numba",
     "calculate_differential_adhesion_forces_numba",
+    "build_cell_list_numba",
+    "repulsion_forces_celllist_numba",
+    "adhesion_forces_celllist_numba",
+    "differential_adhesion_celllist_numba",
 ]

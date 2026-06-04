@@ -13,6 +13,12 @@ from .kernels.forces import (
     resolve_overlaps_numba,
 )
 from .kernels.adhesion import calculate_differential_adhesion_forces_numba
+from .kernels.neighbors import (
+    build_cell_list_numba,
+    repulsion_forces_celllist_numba,
+    adhesion_forces_celllist_numba,
+    differential_adhesion_celllist_numba,
+)
 from .kernels.stokeslet import (
     update_fluid_velocity_numba,
     update_fluid_velocity_with_dipoles_numba,
@@ -53,6 +59,11 @@ class CellSimulation:
         self.viscosity = config['viscosity']
         # Scalar adhesion strength (unused when an 'adhesion_matrix' is supplied).
         self.adhesion_strength = config.get('adhesion_strength', 0.0)
+
+        # Linked-cell neighbor search for the pairwise force loops. Produces the
+        # same forces as the brute-force O(N^2) kernels (to ~1e-10) but scales
+        # near-linearly. On by default; set False to force brute force.
+        self.use_neighbor_list = bool(config.get('use_neighbor_list', True))
         self.adhesion_cutoff_factor = config['adhesion_cutoff_factor']
         self.repulsion_strength = config['repulsion_strength']
         self.division_force_strength = config.get('division_force_strength', 10.0)
@@ -164,19 +175,45 @@ class CellSimulation:
             self.config['max_propulsive_force'], self.dx
         )
 
-        if self.adhesion_matrix is not None:
+        if self.use_neighbor_list and len(radii) > 0:
+            # Bin size must cover the largest interaction range: the adhesion
+            # band (touch * cutoff_factor) for the largest pair, which also
+            # covers the shorter repulsion (touch) range.
+            bin_size = 2.0 * radii.max() * max(self.adhesion_cutoff_factor, 1.0)
+            order, bin_start, nbx = build_cell_list_numba(
+                cell_positions, self.physical_size, bin_size
+            )
+            if self.adhesion_matrix is not None:
+                types = np.array([cell.cell_type for cell in self.cells], dtype=np.int64)
+                adhesion_forces = differential_adhesion_celllist_numba(
+                    cell_positions, radii, types, self.adhesion_matrix,
+                    self.adhesion_cutoff_factor, order, bin_start, nbx, bin_size
+                )
+            else:
+                adhesion_forces = adhesion_forces_celllist_numba(
+                    cell_positions, radii, self.adhesion_strength,
+                    self.adhesion_cutoff_factor, order, bin_start, nbx, bin_size
+                )
+            repulsion_forces = repulsion_forces_celllist_numba(
+                cell_positions, radii, self.repulsion_strength,
+                order, bin_start, nbx, bin_size
+            )
+        elif self.adhesion_matrix is not None:
             types = np.array([cell.cell_type for cell in self.cells], dtype=np.int64)
             adhesion_forces = calculate_differential_adhesion_forces_numba(
                 cell_positions, radii, types, self.adhesion_matrix,
                 self.adhesion_cutoff_factor
             )
+            repulsion_forces = calculate_repulsion_forces_numba(
+                cell_positions, radii, self.repulsion_strength
+            )
         else:
             adhesion_forces = calculate_adhesion_forces_numba(
                 cell_positions, radii, self.adhesion_strength, self.adhesion_cutoff_factor
             )
-        repulsion_forces = calculate_repulsion_forces_numba(
-            cell_positions, radii, self.repulsion_strength
-        )
+            repulsion_forces = calculate_repulsion_forces_numba(
+                cell_positions, radii, self.repulsion_strength
+            )
 
         division_forces = np.zeros_like(propulsion_forces)
         id_to_index = {cell.id: i for i, cell in enumerate(self.cells)}
