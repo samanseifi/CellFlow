@@ -20,6 +20,7 @@ python experiments/viscosity_sweep.py
 | `make_gifs.py` | Animated GIFs of the cluster for low vs high µ. → `cluster_mu*_simulation.gif` |
 | `wound_closure_hydro.py` | Wound-closure phase maps over (µ, δ); `--quick` sanity, `--fronts` smooth-vs-fingered morphology. NOTE: sweeping δ at fixed µ confounds coupling range with friction. |
 | `wound_closure_isolated.py` | Rigorous version: calibrates µ(δ) to hold single-cell speed fixed so only the coupling *range* varies. Closure time, front roughness, fingering wavelength. → `wound_closure_isolated.png` |
+| `wound_closure_ensemble.py` | Seed-averaged (needs #11): mean ± std of closure time and fingering over seeds, at fixed single-cell speed. Result: closure time is non-monotonic in δ (minimum at δ≈32); shortest range robustly impairs closure and maximizes fingering. → `wound_closure_ensemble.png` |
 | `convergence.py` | Precision diagnostics: grid convergence (radius-tied self-mobility now converges — #16 fixed; old grid-tied Peskin drifts), timestep order (~1, forward Euler), and advection mass conservation (interior-conserving; lost only at the clamped boundary). → `convergence.png` |
 
 ## Verification (pytest)
