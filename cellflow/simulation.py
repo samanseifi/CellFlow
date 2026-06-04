@@ -13,6 +13,11 @@ from .kernels.forces import (
     resolve_overlaps_numba,
 )
 from .kernels.adhesion import calculate_differential_adhesion_forces_numba
+from .kernels.mechanics import (
+    velocity_gradient_numba,
+    sample_gradient_at_cells_numba,
+    strain_rate_and_axis,
+)
 from .kernels.neighbors import (
     build_cell_list_numba,
     repulsion_forces_celllist_numba,
@@ -79,6 +84,19 @@ class CellSimulation:
 
         self.hydrodynamics_model = config.get('hydrodynamics_model', 'monopole')
         print(f"INFO: Using '{self.hydrodynamics_model}' model for hydrodynamics.")
+
+        # Mechanotransduction (issue #17): cells sense the local fluid strain
+        # rate and align their polarity (nematically) toward the principal
+        # strain axis at a rate proportional to shear. Optionally, polarity
+        # drives an active propulsion (rheotaxis-like); off by default so the
+        # sensing physics can be verified in isolation.
+        self.enable_mechanotransduction = bool(config.get('enable_mechanotransduction', False))
+        self.shear_alignment_rate = float(config.get('shear_alignment_rate', 1.0))
+        self.polarity_propulsion_force = float(config.get('polarity_propulsion_force', 0.0))
+        if self.enable_mechanotransduction:
+            print(f"INFO: Mechanotransduction ON "
+                  f"(alignment rate = {self.shear_alignment_rate:.3g}, "
+                  f"polarity propulsion = {self.polarity_propulsion_force:.3g}).")
 
         # Fluid solver: 'stokeslet' (legacy free-space 2D Stokeslet sum, default)
         # or 'brinkman_fft' (FFT Brinkman solver + Immersed Boundary coupling).
@@ -247,8 +265,33 @@ class CellSimulation:
                         direction = delta / distance
                         division_forces[i] -= force_magnitude * direction
 
+        # Active propulsion along each cell's polarity (mechanotransduction
+        # response, e.g. rheotaxis). Lagged: uses last step's polarity. Off when
+        # polarity_propulsion_force == 0.
+        if self.enable_mechanotransduction and self.polarity_propulsion_force > 0.0:
+            for i, cell in enumerate(self.cells):
+                propulsion_forces[i, 0] += self.polarity_propulsion_force * np.cos(cell.polarity)
+                propulsion_forces[i, 1] += self.polarity_propulsion_force * np.sin(cell.polarity)
+
         monopolar_forces = adhesion_forces + repulsion_forces + division_forces
         return propulsion_forces, monopolar_forces
+
+    def _update_polarity(self, cell_positions, radii):
+        """Align each cell's polarity nematically toward the local fluid strain
+        axis at a rate proportional to the shear magnitude:
+
+            dphi/dt = -k * shear_rate * sin(2 (phi - axis))
+
+        with k = shear_alignment_rate. Fixed point at phi = axis (stable),
+        phi = axis + pi/2 (unstable). Uses the just-solved fluid velocity.
+        """
+        grad = velocity_gradient_numba(self.fluid_velocity, self.dx)
+        cell_grad = sample_gradient_at_cells_numba(cell_positions, radii, grad, self.dx)
+        shear_rate, axis = strain_rate_and_axis(cell_grad)
+        for i, cell in enumerate(self.cells):
+            dphi = -self.shear_alignment_rate * shear_rate[i] * \
+                np.sin(2.0 * (cell.polarity - axis[i])) * self.dt
+            cell.polarity = (cell.polarity + dphi) % np.pi
 
     def _simulation_step(self):
         if not self.cells:
@@ -300,6 +343,11 @@ class CellSimulation:
                 self.fluid_velocity, cell_positions, total_forces,
                 self.viscosity, self.dx, self.stokeslet_cutoff
             )
+
+        # 3b. Mechanotransduction: cells sense the fluid strain rate and align
+        #     their polarity toward the principal strain axis (issue #17).
+        if self.enable_mechanotransduction:
+            self._update_polarity(cell_positions, radii)
 
         # 4. Check CFL stability for advection (warn once per simulation)
         if not self._cfl_warned:

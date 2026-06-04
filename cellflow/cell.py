@@ -22,6 +22,12 @@ class Cell:
         self.radius = self.min_radius
         self.update_radius()
         self.velocity = np.array([0.0, 0.0])
+        # Polarity director angle (radians, nematic: defined mod pi). Aligns
+        # toward the local fluid strain axis when mechanotransduction is on.
+        # Initialized deterministically from the id (golden-angle spread) so it
+        # gives varied orientations WITHOUT consuming the global RNG stream
+        # (which would shift seeded results, breaking reproducibility #11).
+        self.polarity = (self.id * 2.399963229728653) % np.pi
         self.just_divided_timer = just_divided_timer
         self.division_partner_id = -1
         self.division_force_timer = 0
@@ -56,6 +62,7 @@ class Cell:
             daughter = Cell(self.position + np.random.randn(2) * self.radius,
                             self.nutrient_accumulated, just_divided_timer=5,
                             cell_type=self.cell_type)
+            daughter.polarity = self.polarity     # inherit orientation
 
             self.division_partner_id = daughter.id
             daughter.division_partner_id = self.id
