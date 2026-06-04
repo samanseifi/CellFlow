@@ -7,11 +7,17 @@ from .kernels.fields import absorb_nutrient_numba, secrete_over_area_numba
 class Cell:
     next_id = 0
 
-    def __init__(self, position, nutrient=20.0, just_divided_timer=0, cell_type=0):
+    def __init__(self, position, nutrient=20.0, just_divided_timer=0, cell_type=0,
+                 area_conserving=False):
         self.id = Cell.next_id
         Cell.next_id += 1
         self.position = np.array(position, dtype=np.float64)
         self.cell_type = cell_type
+        # Growth mode: 'area_conserving' grows AREA linearly with nutrient
+        # (radius ~ sqrt) so division (halving nutrient) halves area -> total
+        # area is conserved. The legacy default grows radius linearly with
+        # nutrient (area grows quadratically; division is not area-conserving).
+        self.area_conserving = area_conserving
         self.nutrient_accumulated = nutrient
         self.consumption_rate = np.random.normal(0.2, 0.05)
         self.secretion_rate = 1.0
@@ -37,9 +43,19 @@ class Cell:
         self.division_force_timer = 0
 
     def update_radius(self):
-        growth_factor = (self.max_radius - self.min_radius) / 100.0
-        self.radius = self.min_radius + self.nutrient_accumulated * growth_factor
-        self.radius = np.clip(self.radius, self.min_radius, self.max_radius)
+        if self.area_conserving:
+            # Area grows linearly with nutrient (mass); radius from area. At the
+            # division threshold nutrient=100 -> radius=max_radius; halving
+            # nutrient -> area/2 -> radius = max_radius/sqrt(2). Two daughters
+            # then total the mother's area exactly.
+            frac = max(0.0, self.nutrient_accumulated / 100.0)
+            area = np.pi * self.max_radius ** 2 * frac
+            area_floor = np.pi * (0.5 * self.min_radius) ** 2   # stability floor
+            self.radius = min(np.sqrt(max(area, area_floor) / np.pi), self.max_radius)
+        else:
+            growth_factor = (self.max_radius - self.min_radius) / 100.0
+            self.radius = self.min_radius + self.nutrient_accumulated * growth_factor
+            self.radius = np.clip(self.radius, self.min_radius, self.max_radius)
 
     def update_phase(self):
         if self.radius >= self.max_radius and self.phase == 'GROWTH':
@@ -80,7 +96,8 @@ class Cell:
             norm = np.sqrt(d[0] ** 2 + d[1] ** 2)
             direction = d / norm if norm > 1e-9 else np.array([1.0, 0.0])
             daughter = Cell(self.position.copy(), self.nutrient_accumulated,
-                            just_divided_timer=5, cell_type=self.cell_type)
+                            just_divided_timer=5, cell_type=self.cell_type,
+                            area_conserving=self.area_conserving)
             daughter.position = self.position + direction * (self.radius + daughter.radius)
             daughter.polarity = self.polarity     # inherit orientation
 

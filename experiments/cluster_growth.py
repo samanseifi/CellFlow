@@ -47,7 +47,7 @@ def config():
         'repulsion_strength': 80.0, 'attractant_D': 0.0, 'chi_attractant': 0.0,
         'enable_visualization': False, 'seed': 7,
         'fluid_model': 'brinkman_fft', 'brinkman_screening_length': 15.0,
-        'overlap_iterations': 10,
+        'overlap_iterations': 10, 'growth_model': 'area_conserving',
         # real cell-shape mechanics (stiff: subtle deformation)
         'enable_cell_shape': True, 'shape_compliance': 0.012,
         'shape_relaxation_time': 0.6, 'shape_max_aspect': 1.4,
