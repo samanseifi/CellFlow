@@ -4,6 +4,10 @@
 # Ignore PNG images
 *.png
 
+# Ignore generated GIFs and simulation output directories
+*.gif
+simulation_data_*/
+
 # Test / tooling caches
 .pytest_cache/
 

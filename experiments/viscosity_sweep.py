@@ -41,6 +41,7 @@ def base_config(mu):
     return {
         'initial_setup_type': 'central_uniform',
         'num_cells': 80,
+        'initial_cluster_radius': 8.0,   # compact start so spreading is visible
         'dt': 0.01,
         'physical_size': 80.0,
         'grid_resolution': 80,
