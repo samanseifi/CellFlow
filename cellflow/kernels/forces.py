@@ -53,15 +53,16 @@ def calculate_repulsion_forces_numba(positions, radii, repulsion_strength):
 
 @njit(parallel=True, cache=True)
 def calculate_propulsion_forces_numba(positions, radii, grad_x_field, grad_y_field,
-                                       chi_nutrient, walk_speed, max_propulsive_force, dx):
+                                       chi_nutrient, walk_speed, max_propulsive_force, dx,
+                                       noise):
     """Computes chemotactic propulsion forces for all cells in parallel.
 
-    Replaces the sequential Python loop in _calculate_forces so that
-    gradient-field sampling for each cell is done concurrently.
-
-    Note: Numba's parallel mode gives each thread its own independent RNG
-    state, so np.random.randn() calls here are thread-safe. The simulation
-    is intentionally stochastic (random walk), matching the original behaviour.
+    The random-walk noise is supplied as ``noise`` (shape (num_cells, 2)),
+    generated once per step in the main thread from a seeded RNG. This is what
+    makes the simulation reproducible: Numba's parallel mode gives each thread
+    its own RNG state that np.random.seed() cannot control (and which depends on
+    the thread count), so randomness must be injected rather than drawn inside
+    the kernel.
     """
     num_cells = len(positions)
     forces = np.zeros((num_cells, 2))
@@ -70,8 +71,8 @@ def calculate_propulsion_forces_numba(positions, radii, grad_x_field, grad_y_fie
         avg_grad_x = _sample_scalar_field_numba(positions[i], radii[i], grad_x_field, dx)
         avg_grad_y = _sample_scalar_field_numba(positions[i], radii[i], grad_y_field, dx)
 
-        force_dir_x = chi_nutrient * avg_grad_x + walk_speed * np.random.randn()
-        force_dir_y = chi_nutrient * avg_grad_y + walk_speed * np.random.randn()
+        force_dir_x = chi_nutrient * avg_grad_x + walk_speed * noise[i, 0]
+        force_dir_y = chi_nutrient * avg_grad_y + walk_speed * noise[i, 1]
 
         norm = np.sqrt(force_dir_x**2 + force_dir_y**2)
         if norm > 0.0:
@@ -87,6 +88,10 @@ def resolve_overlaps_numba(positions, radii):
 
     Sequentially processes all pairs; positions are modified directly so the
     caller only needs a simple write-back loop to update Cell objects.
+
+    The exactly-coincident case (dist ~ 0) is a degenerate tiebreaker: cells are
+    separated along a deterministic golden-angle direction (no RNG), so the
+    routine is fully reproducible.
     """
     n = len(positions)
     for a in range(n):
@@ -96,8 +101,9 @@ def resolve_overlaps_numba(positions, radii):
             dist = np.sqrt(dx_**2 + dy_**2)
             touch = radii[a] + radii[b]
             if dist < 1e-12:
-                shift_x = 0.5 * touch * np.random.randn()
-                shift_y = 0.5 * touch * np.random.randn()
+                angle = a * 2.39996322972865332   # golden angle (radians)
+                shift_x = 0.5 * touch * np.cos(angle)
+                shift_y = 0.5 * touch * np.sin(angle)
                 positions[a, 0] -= shift_x
                 positions[a, 1] -= shift_y
                 positions[b, 0] += shift_x

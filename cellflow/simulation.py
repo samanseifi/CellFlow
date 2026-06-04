@@ -35,6 +35,15 @@ class CellSimulation:
         self.config_name = config_name
         self.config = config
 
+        # Reproducibility (issue #11). Seeding the global NumPy RNG here — before
+        # cells/fields are built — makes all main-thread randomness (cell init,
+        # division, type assignment, initializers) deterministic. The parallel
+        # Numba kernels never draw their own randomness; the per-step random-walk
+        # noise is generated here and passed in (see _calculate_forces).
+        self.seed = config.get('seed')
+        if self.seed is not None:
+            np.random.seed(int(self.seed))
+
         self.physical_size = float(config['physical_size'])
         self.grid_resolution = int(config['grid_resolution'])
         self.dx = self.physical_size / self.grid_resolution
@@ -173,11 +182,15 @@ class CellSimulation:
         monopolar forces (adhesion, repulsion, division) act as point forces.
         """
         grad_nutrient_y, grad_nutrient_x = np.gradient(self.nutrient_field, self.dx)
+        # Random-walk noise drawn here (seedable main thread) and injected into
+        # the parallel kernel for reproducibility (issue #11).
+        noise = np.random.standard_normal((len(self.cells), 2))
         propulsion_forces = calculate_propulsion_forces_numba(
             cell_positions, radii,
             grad_nutrient_x, grad_nutrient_y,
             self.chi_nutrient, self.walk_speed,
-            self.config['max_propulsive_force'], self.dx
+            self.config['max_propulsive_force'], self.dx,
+            noise
         )
 
         if self.use_neighbor_list and len(radii) > 0:
