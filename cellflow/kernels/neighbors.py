@@ -1,0 +1,177 @@
+"""Linked-cell (cell-list) neighbor search to make the pairwise force loops
+near-linear instead of O(N^2).
+
+Cells are binned into a uniform grid whose bin size is >= the largest
+interaction range, so every interacting pair lands in the same or an adjacent
+bin. Each cell then only checks the 3x3 block of bins around it. When the bin
+size covers the true cutoff, the resulting forces are identical to the
+brute-force O(N^2) kernels (verified in tests).
+
+The build uses a counting sort (no Python-side dynamic lists): ``bin_start``
+holds the prefix-sum offsets and ``order`` lists cell indices grouped by bin.
+"""
+import numpy as np
+from numba import njit, prange
+
+
+@njit(cache=True)
+def build_cell_list_numba(positions, physical_size, bin_size):
+    """Bin cells into a uniform grid via counting sort.
+
+    Returns
+    -------
+    order : (N,) int array of cell indices grouped by bin.
+    bin_start : (nbins + 1,) int array of per-bin start offsets into ``order``.
+    nbx : int, number of bins per axis.
+    """
+    n = positions.shape[0]
+    nbx = int(physical_size / bin_size) + 1
+    nbins = nbx * nbx
+
+    counts = np.zeros(nbins + 1, dtype=np.int64)
+    bin_of = np.empty(n, dtype=np.int64)
+    for k in range(n):
+        bx = int(positions[k, 0] / bin_size)
+        by = int(positions[k, 1] / bin_size)
+        if bx < 0: bx = 0
+        elif bx >= nbx: bx = nbx - 1
+        if by < 0: by = 0
+        elif by >= nbx: by = nbx - 1
+        b = by * nbx + bx
+        bin_of[k] = b
+        counts[b + 1] += 1
+
+    # prefix sum -> bin_start
+    for b in range(nbins):
+        counts[b + 1] += counts[b]
+    bin_start = counts
+
+    order = np.empty(n, dtype=np.int64)
+    cursor = bin_start[:nbins].copy()
+    for k in range(n):
+        b = bin_of[k]
+        order[cursor[b]] = k
+        cursor[b] += 1
+
+    return order, bin_start, nbx
+
+
+@njit(parallel=True, cache=True)
+def repulsion_forces_celllist_numba(positions, radii, repulsion_strength,
+                                    order, bin_start, nbx, bin_size):
+    """Cell-list version of calculate_repulsion_forces_numba."""
+    n = positions.shape[0]
+    forces = np.zeros((n, 2))
+    for i in prange(n):
+        bx = int(positions[i, 0] / bin_size)
+        by = int(positions[i, 1] / bin_size)
+        if bx < 0: bx = 0
+        elif bx >= nbx: bx = nbx - 1
+        if by < 0: by = 0
+        elif by >= nbx: by = nbx - 1
+        for dby in range(-1, 2):
+            ny = by + dby
+            if ny < 0 or ny >= nbx:
+                continue
+            for dbx in range(-1, 2):
+                nx = bx + dbx
+                if nx < 0 or nx >= nbx:
+                    continue
+                b = ny * nbx + nx
+                for s in range(bin_start[b], bin_start[b + 1]):
+                    j = order[s]
+                    if j == i:
+                        continue
+                    dx_ = positions[j, 0] - positions[i, 0]
+                    dy_ = positions[j, 1] - positions[i, 1]
+                    dist = np.sqrt(dx_**2 + dy_**2)
+                    touch = radii[i] + radii[j]
+                    if 0.0 < dist < touch:
+                        overlap = touch - dist
+                        force_mag = repulsion_strength * np.exp(3.0 * overlap / touch)
+                        inv_dist = 1.0 / dist
+                        forces[i, 0] -= force_mag * dx_ * inv_dist
+                        forces[i, 1] -= force_mag * dy_ * inv_dist
+    return forces
+
+
+@njit(parallel=True, cache=True)
+def adhesion_forces_celllist_numba(positions, radii, adhesion_strength,
+                                   adhesion_cutoff_factor,
+                                   order, bin_start, nbx, bin_size):
+    """Cell-list version of calculate_adhesion_forces_numba."""
+    n = positions.shape[0]
+    forces = np.zeros((n, 2))
+    for i in prange(n):
+        bx = int(positions[i, 0] / bin_size)
+        by = int(positions[i, 1] / bin_size)
+        if bx < 0: bx = 0
+        elif bx >= nbx: bx = nbx - 1
+        if by < 0: by = 0
+        elif by >= nbx: by = nbx - 1
+        for dby in range(-1, 2):
+            ny = by + dby
+            if ny < 0 or ny >= nbx:
+                continue
+            for dbx in range(-1, 2):
+                nx = bx + dbx
+                if nx < 0 or nx >= nbx:
+                    continue
+                b = ny * nbx + nx
+                for s in range(bin_start[b], bin_start[b + 1]):
+                    j = order[s]
+                    if j == i:
+                        continue
+                    dx_ = positions[j, 0] - positions[i, 0]
+                    dy_ = positions[j, 1] - positions[i, 1]
+                    distance = np.sqrt(dx_**2 + dy_**2)
+                    touching_dist = radii[i] + radii[j]
+                    cutoff_dist = touching_dist * adhesion_cutoff_factor
+                    if touching_dist < distance < cutoff_dist:
+                        force_magnitude = adhesion_strength * (distance - touching_dist)
+                        inv_dist = 1.0 / distance
+                        forces[i, 0] += force_magnitude * dx_ * inv_dist
+                        forces[i, 1] += force_magnitude * dy_ * inv_dist
+    return forces
+
+
+@njit(parallel=True, cache=True)
+def differential_adhesion_celllist_numba(positions, radii, types, adhesion_matrix,
+                                         adhesion_cutoff_factor,
+                                         order, bin_start, nbx, bin_size):
+    """Cell-list version of calculate_differential_adhesion_forces_numba."""
+    n = positions.shape[0]
+    forces = np.zeros((n, 2))
+    for i in prange(n):
+        ti = types[i]
+        bx = int(positions[i, 0] / bin_size)
+        by = int(positions[i, 1] / bin_size)
+        if bx < 0: bx = 0
+        elif bx >= nbx: bx = nbx - 1
+        if by < 0: by = 0
+        elif by >= nbx: by = nbx - 1
+        for dby in range(-1, 2):
+            ny = by + dby
+            if ny < 0 or ny >= nbx:
+                continue
+            for dbx in range(-1, 2):
+                nx = bx + dbx
+                if nx < 0 or nx >= nbx:
+                    continue
+                b = ny * nbx + nx
+                for s in range(bin_start[b], bin_start[b + 1]):
+                    j = order[s]
+                    if j == i:
+                        continue
+                    dx_ = positions[j, 0] - positions[i, 0]
+                    dy_ = positions[j, 1] - positions[i, 1]
+                    distance = np.sqrt(dx_**2 + dy_**2)
+                    touching_dist = radii[i] + radii[j]
+                    cutoff_dist = touching_dist * adhesion_cutoff_factor
+                    if touching_dist < distance < cutoff_dist:
+                        strength = adhesion_matrix[ti, types[j]]
+                        force_magnitude = strength * (distance - touching_dist)
+                        inv_dist = 1.0 / distance
+                        forces[i, 0] += force_magnitude * dx_ * inv_dist
+                        forces[i, 1] += force_magnitude * dy_ * inv_dist
+    return forces

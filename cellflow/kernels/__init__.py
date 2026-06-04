@@ -1,42 +1,31 @@
-"""Backward-compatibility shim.
-
-The monolithic module was split into focused submodules (see cellflow/cell.py,
-cellflow/simulation.py, cellflow/initializers.py, cellflow/kernels/, etc.).
-This module re-exports the full public API so existing imports such as
-``from cellflow.cellflow_core import CellSimulation`` keep working.
-"""
-from .cell import Cell
-from .simulation import CellSimulation
-from .initializers import (
-    setup_central_uniform,
-    setup_wound_healing,
-    INITIALIZER_MAP,
-)
-from .kernels.diffusion import diffuse_field_numba, advect_scalar_field_numba
-from .kernels.fields import (
+"""Numba-compiled compute kernels for the CellFlow simulation."""
+from .diffusion import diffuse_field_numba, advect_scalar_field_numba
+from .fields import (
     absorb_nutrient_numba,
     secrete_over_area_numba,
     sample_field_at_cell_numba,
     _sample_scalar_field_numba,
 )
-from .kernels.stokeslet import (
+from .stokeslet import (
     update_fluid_velocity_numba,
     update_fluid_velocity_with_dipoles_numba,
     compute_cell_velocities_numba,
 )
-from .kernels.forces import (
+from .forces import (
     calculate_adhesion_forces_numba,
     calculate_repulsion_forces_numba,
     calculate_propulsion_forces_numba,
     resolve_overlaps_numba,
 )
+from .adhesion import calculate_differential_adhesion_forces_numba
+from .neighbors import (
+    build_cell_list_numba,
+    repulsion_forces_celllist_numba,
+    adhesion_forces_celllist_numba,
+    differential_adhesion_celllist_numba,
+)
 
 __all__ = [
-    "Cell",
-    "CellSimulation",
-    "setup_central_uniform",
-    "setup_wound_healing",
-    "INITIALIZER_MAP",
     "diffuse_field_numba",
     "advect_scalar_field_numba",
     "absorb_nutrient_numba",
@@ -50,4 +39,9 @@ __all__ = [
     "calculate_repulsion_forces_numba",
     "calculate_propulsion_forces_numba",
     "resolve_overlaps_numba",
+    "calculate_differential_adhesion_forces_numba",
+    "build_cell_list_numba",
+    "repulsion_forces_celllist_numba",
+    "adhesion_forces_celllist_numba",
+    "differential_adhesion_celllist_numba",
 ]
