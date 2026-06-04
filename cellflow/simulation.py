@@ -89,9 +89,9 @@ class CellSimulation:
         # viscoelastic law  d(eps)/dt = (chi*stress - eps)/tau, capped at a max
         # aspect ratio. Mechanics stay circular; shape is the elastic response.
         self.enable_cell_shape = bool(config.get('enable_cell_shape', False))
-        self.shape_compliance = float(config.get('shape_compliance', 0.05))
-        self.shape_relaxation_time = float(config.get('shape_relaxation_time', 0.5))
-        self.shape_max_aspect = float(config.get('shape_max_aspect', 2.5))
+        self.shape_compliance = float(config.get('shape_compliance', 0.012))
+        self.shape_relaxation_time = float(config.get('shape_relaxation_time', 0.6))
+        self.shape_max_aspect = float(config.get('shape_max_aspect', 1.4))
         if self.enable_cell_shape:
             print(f"INFO: Cell-shape mechanics ON (compliance={self.shape_compliance:.3g}, "
                   f"relax_time={self.shape_relaxation_time:.3g}, "

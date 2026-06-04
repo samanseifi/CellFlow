@@ -40,26 +40,24 @@ def config():
         'initial_setup_type': 'central_uniform', 'num_cells': 6,
         'initial_cluster_radius': 4.0, 'dt': 0.05,
         'physical_size': L, 'grid_resolution': G,
-        'nutrient_bc_type': 'dirichlet', 'nutrient_bc_value': 100.0,
-        'nutrient_D': 0.6, 'chi_nutrient': 8.0,
-        'walk_speed': 0.3, 'max_propulsive_force': 15.0,
+        'nutrient_bc_type': 'dirichlet', 'nutrient_bc_value': 85.0,
+        'nutrient_D': 0.6, 'chi_nutrient': 6.0,
+        'walk_speed': 0.25, 'max_propulsive_force': 12.0,
         'viscosity': 100.0, 'adhesion_strength': 0.4, 'adhesion_cutoff_factor': 1.5,
-        'repulsion_strength': 60.0, 'attractant_D': 0.0, 'chi_attractant': 0.0,
+        'repulsion_strength': 80.0, 'attractant_D': 0.0, 'chi_attractant': 0.0,
         'enable_visualization': False, 'seed': 7,
         'fluid_model': 'brinkman_fft', 'brinkman_screening_length': 15.0,
-        'overlap_iterations': 4,
-        # real cell-shape mechanics
-        'enable_cell_shape': True, 'shape_compliance': 0.03,
-        'shape_relaxation_time': 0.3, 'shape_max_aspect': 2.2,
+        'overlap_iterations': 10,
+        # real cell-shape mechanics (stiff: subtle deformation)
+        'enable_cell_shape': True, 'shape_compliance': 0.012,
+        'shape_relaxation_time': 0.6, 'shape_max_aspect': 1.4,
     }
 
 
-def draw_cells(ax, cells):
-    for c in cells:
-        a, b, ang = c.shape_axes()
-        color = 'red' if c.phase == 'DIVISION' else 'white'
-        ax.add_patch(Ellipse(c.position, 2 * a, 2 * b, angle=np.degrees(ang),
-                             color=color, alpha=0.85, ec='black', lw=0.4))
+def _inscribed(a, b, r):
+    """Scale ellipse so its long axis = collision radius (no poke past r)."""
+    s = r / max(a, b)
+    return a * s, b * s
 
 
 def main():
@@ -85,7 +83,7 @@ def main():
         ax.imshow(nut, cmap='viridis', origin='lower', extent=[0, L, 0, L])
         for pos, r, exx, exy, ph in cells:
             m = np.hypot(exx, exy)
-            a, b = r * np.exp(m), r * np.exp(-m)
+            a, b = _inscribed(r * np.exp(m), r * np.exp(-m), r)
             ang = np.degrees(0.5 * np.arctan2(exy, exx))
             ax.add_patch(Ellipse(pos, 2 * a, 2 * b, angle=ang,
                                  color='red' if ph == 'DIVISION' else 'white',

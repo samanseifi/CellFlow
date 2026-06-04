@@ -23,6 +23,11 @@ def render_frame(nutrient_field, cells, physical_size, step, output_dir):
 
     for cell in cells:
         a, b, angle = cell.shape_axes()
+        # Inscribe the ellipse within the collision radius (scale so the long
+        # axis = radius) so a deformed cell never renders beyond where the
+        # circular mechanics actually keep neighbours apart.
+        scale = cell.radius / max(a, b)
+        a, b = a * scale, b * scale
         color = 'red' if cell.phase == 'DIVISION' else 'white'
         ax.add_patch(Ellipse(cell.position, 2 * a, 2 * b, angle=np.degrees(angle),
                              color=color, alpha=0.75, ec='black', lw=0.6))
