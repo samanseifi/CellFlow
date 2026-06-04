@@ -30,8 +30,11 @@ from .kernels.stokeslet import (
     update_fluid_velocity_with_dipoles_numba,
     compute_cell_velocities_numba,
 )
-from .fluid.brinkman_fft import solve_velocity, alpha_from_screening_length
+from .fluid.brinkman_fft import (
+    solve_velocity, solve_velocity_variable_alpha, alpha_from_screening_length,
+)
 from .fluid.ibm import spread_forces_blob_numba, interpolate_velocity_blob_numba
+from .kernels.fields import secrete_over_area_numba
 from . import visualization
 from . import io
 
@@ -172,6 +175,18 @@ class CellSimulation:
             print(f"INFO: Differential adhesion ON "
                   f"({self.adhesion_matrix.shape[0]} cell types).")
 
+        # Dynamic ECM (issue #18): cells deposit extracellular matrix into a
+        # field that raises the local Brinkman drag (lowers permeability), so
+        # flow reroutes around cell-built matrix. Requires fluid_model='brinkman_fft'.
+        self.enable_ecm = bool(config.get('enable_ecm', False))
+        self.ecm_secretion_rate = float(config.get('ecm_secretion_rate', 1.0))
+        self.ecm_decay_rate = float(config.get('ecm_decay_rate', 0.01))
+        self.ecm_drag_coeff = float(config.get('ecm_drag_coeff', 0.5))
+        self.ecm_field = np.zeros((self.grid_resolution, self.grid_resolution))
+        if self.enable_ecm:
+            print(f"INFO: Dynamic ECM ON (secretion={self.ecm_secretion_rate:.3g}, "
+                  f"decay={self.ecm_decay_rate:.3g}, drag_coeff={self.ecm_drag_coeff:.3g}).")
+
         self.attractant_field = np.zeros((self.grid_resolution, self.grid_resolution))
         self.fluid_velocity = np.zeros((self.grid_resolution, self.grid_resolution, 2))
 
@@ -294,6 +309,17 @@ class CellSimulation:
         monopolar_forces = adhesion_forces + repulsion_forces + division_forces
         return propulsion_forces, monopolar_forces
 
+    def _update_ecm(self):
+        """Decay the ECM field and let each cell deposit matrix over its area.
+        Returns the resulting spatially-varying Brinkman drag field."""
+        if self.ecm_decay_rate > 0.0:
+            self.ecm_field *= max(0.0, 1.0 - self.ecm_decay_rate * self.dt)
+        amount = self.ecm_secretion_rate * self.dt
+        for cell in self.cells:
+            secrete_over_area_numba(cell.position, cell.radius, self.ecm_field,
+                                    amount, self.dx)
+        return self.brinkman_alpha + self.ecm_drag_coeff * self.ecm_field
+
     def _update_shapes(self, cell_positions, radii):
         """Evolve each cell's deviatoric strain toward chi * (deviatoric contact
         stress) by a viscoelastic relaxation, capped at shape_max_aspect.
@@ -362,10 +388,17 @@ class CellSimulation:
                 cell_positions, total_forces, sigmas,
                 self.grid_resolution, self.grid_resolution, self.dx
             )
-            self.fluid_velocity = solve_velocity(
-                force_density, mu=self.viscosity, dx=self.dx,
-                alpha=self.brinkman_alpha,
-            )
+            if self.enable_ecm:
+                alpha_field = self._update_ecm()        # cell-remodeled drag field
+                self.fluid_velocity, self._ecm_iters, self._ecm_residual = \
+                    solve_velocity_variable_alpha(
+                        force_density, mu=self.viscosity, dx=self.dx,
+                        alpha_field=alpha_field)
+            else:
+                self.fluid_velocity = solve_velocity(
+                    force_density, mu=self.viscosity, dx=self.dx,
+                    alpha=self.brinkman_alpha,
+                )
             precomputed_cell_velocities = interpolate_velocity_blob_numba(
                 self.fluid_velocity, cell_positions, sigmas, self.dx
             )
