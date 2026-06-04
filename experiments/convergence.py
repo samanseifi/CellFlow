@@ -29,7 +29,10 @@ import matplotlib.pyplot as plt
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from cellflow.simulation import CellSimulation  # noqa: E402
 from cellflow.fluid.brinkman_fft import solve_velocity, alpha_from_screening_length  # noqa: E402
-from cellflow.fluid.ibm import spread_forces_numba, interpolate_velocity_numba  # noqa: E402
+from cellflow.fluid.ibm import (  # noqa: E402
+    spread_forces_numba, interpolate_velocity_numba,
+    spread_forces_blob_numba, interpolate_velocity_blob_numba,
+)
 from cellflow.kernels.diffusion import advect_scalar_field_numba, diffuse_field_numba  # noqa: E402
 
 L = 64.0
@@ -38,28 +41,38 @@ F = 30.0
 
 
 # ---------- 1. grid convergence ----------
+RADIUS = 3.0   # cell radius -> physical regularization width sigma
+
+
 def grid_study():
     Gs = [64, 128, 256, 512]
-    self_mob, interaction = [], []
+    peskin_self, blob_self, interaction = [], [], []
     sep = 16.0
     for G in Gs:
         dx = L / G
         alpha = alpha_from_screening_length(1.0, DELTA)
-        # (a) single-cell self-mobility
         pos1 = np.array([[L / 2, L / 2]])
         f1 = np.array([[F, 0.0]])
+        # (a) self-mobility, OLD grid-tied Peskin kernel
         fd = spread_forces_numba(pos1, f1, G, G, dx)
         u = solve_velocity(fd, mu=1.0, dx=dx, alpha=alpha)
         v = interpolate_velocity_numba(u, pos1, dx)
-        self_mob.append(float(np.hypot(v[0, 0], v[0, 1])))
-        # (b) interaction: speed entrained at a passive cell `sep` away
+        peskin_self.append(float(np.hypot(v[0, 0], v[0, 1])))
+        # (b) self-mobility, NEW radius-tied Gaussian blob (#16 fix)
+        sig = np.array([RADIUS])
+        fdb = spread_forces_blob_numba(pos1, f1, sig, G, G, dx)
+        ub = solve_velocity(fdb, mu=1.0, dx=dx, alpha=alpha)
+        vb = interpolate_velocity_blob_numba(ub, pos1, sig, dx)
+        blob_self.append(float(np.hypot(vb[0, 0], vb[0, 1])))
+        # (c) interaction (far field) with the blob kernel
         pos2 = np.array([[L / 2 - sep / 2, L / 2], [L / 2 + sep / 2, L / 2]])
         f2 = np.array([[F, 0.0], [0.0, 0.0]])
-        fd2 = spread_forces_numba(pos2, f2, G, G, dx)
+        sig2 = np.array([RADIUS, RADIUS])
+        fd2 = spread_forces_blob_numba(pos2, f2, sig2, G, G, dx)
         u2 = solve_velocity(fd2, mu=1.0, dx=dx, alpha=alpha)
-        v2 = interpolate_velocity_numba(u2, pos2, dx)
+        v2 = interpolate_velocity_blob_numba(u2, pos2, sig2, dx)
         interaction.append(float(np.hypot(v2[1, 0], v2[1, 1])))
-    return Gs, self_mob, interaction
+    return Gs, peskin_self, blob_self, interaction
 
 
 # ---------- 2. timestep convergence ----------
@@ -122,14 +135,14 @@ def mass_study():
 
 def main():
     print("=== 1. GRID convergence (fixed physical size & screening) ===")
-    Gs, self_mob, interaction = grid_study()
-    print(f"{'G':>6} {'dx':>7} {'self_mobility':>14} {'interaction':>12}")
-    for G, sm, it in zip(Gs, self_mob, interaction):
-        print(f"{G:>6} {L/G:>7.3f} {sm:>14.5f} {it:>12.6f}")
-    print(f"  self-mobility change last refinement: "
-          f"{100*abs(self_mob[-1]-self_mob[-2])/self_mob[-2]:.1f}%  (grid-tied -> does NOT converge)")
-    print(f"  interaction change last refinement:   "
-          f"{100*abs(interaction[-1]-interaction[-2])/interaction[-2]:.1f}%  (far field -> converges)")
+    Gs, peskin_self, blob_self, interaction = grid_study()
+    print(f"{'G':>6} {'dx':>7} {'self(Peskin)':>13} {'self(blob #16)':>15} {'interaction':>12}")
+    for G, ps, bs, it in zip(Gs, peskin_self, blob_self, interaction):
+        print(f"{G:>6} {L/G:>7.3f} {ps:>13.4f} {bs:>15.4f} {it:>12.6f}")
+    print(f"  Peskin self-mobility change last step: "
+          f"{100*abs(peskin_self[-1]-peskin_self[-2])/peskin_self[-2]:.1f}%  (grid-tied -> diverges)")
+    print(f"  blob   self-mobility change last step: "
+          f"{100*abs(blob_self[-1]-blob_self[-2])/blob_self[-2]:.1f}%  (radius-tied #16 -> CONVERGES)")
 
     print("\n=== 2. TIMESTEP convergence (forward Euler, expect order ~1) ===")
     dts_e, errs, orders = dt_study()
@@ -146,11 +159,14 @@ def main():
           "boundary; keep fields away from edges or use a conservative/periodic scheme)")
 
     fig, ax = plt.subplots(1, 3, figsize=(16, 4.5))
-    ax[0].plot(Gs, self_mob, 'o-', label='self-mobility (grid-tied)')
-    ax[0].plot(Gs, interaction, 's-', label='interaction (far field)')
+    ax[0].plot(Gs, peskin_self, 'o-', color='tab:red',
+               label='self-mobility, Peskin (grid-tied)')
+    ax[0].plot(Gs, blob_self, 'o-', color='tab:blue',
+               label='self-mobility, blob (radius-tied #16)')
+    ax[0].plot(Gs, interaction, 's-', color='tab:green', label='interaction (far field)')
     ax[0].set(xscale='log', xlabel='grid points per axis G', ylabel='speed',
-              title='1. Grid convergence\nself-mobility drifts; interaction converges')
-    ax[0].legend(); ax[0].grid(True, alpha=0.3)
+              title='1. Grid convergence\nradius-tied self-mobility converges; grid-tied drifts')
+    ax[0].legend(fontsize=8); ax[0].grid(True, alpha=0.3)
 
     ax[1].loglog(dts_e, errs, 'o-')
     ax[1].loglog(dts_e, [errs[0] * (d / dts_e[0]) for d in dts_e], 'k--',

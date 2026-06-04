@@ -25,7 +25,7 @@ from .kernels.stokeslet import (
     compute_cell_velocities_numba,
 )
 from .fluid.brinkman_fft import solve_velocity, alpha_from_screening_length
-from .fluid.ibm import spread_forces_numba, interpolate_velocity_numba
+from .fluid.ibm import spread_forces_blob_numba, interpolate_velocity_blob_numba
 from . import visualization
 from . import io
 
@@ -86,8 +86,13 @@ class CellSimulation:
             self.brinkman_alpha = alpha_from_screening_length(
                 self.viscosity, self.brinkman_screening_length
             )
+            # IBM regularization width is tied to the cell radius (sigma =
+            # ibm_reg_factor * radius), NOT the grid, so single-cell mobility is
+            # grid-convergent (issue #16).
+            self.ibm_reg_factor = float(config.get('ibm_reg_factor', 1.0))
             print(f"INFO: Fluid solver = Brinkman/FFT+IBM "
-                  f"(screening length = {self.brinkman_screening_length:.3g}).")
+                  f"(screening length = {self.brinkman_screening_length:.3g}, "
+                  f"ibm_reg_factor = {self.ibm_reg_factor:.3g}).")
         else:
             print(f"INFO: Fluid solver = '{self.fluid_model}' (legacy Stokeslet).")
 
@@ -252,16 +257,17 @@ class CellSimulation:
         #    cell velocities separately in step 8.
         precomputed_cell_velocities = None
         if self.fluid_model == 'brinkman_fft':
-            force_density = spread_forces_numba(
-                cell_positions, total_forces,
+            sigmas = self.ibm_reg_factor * radii   # physical regularization width
+            force_density = spread_forces_blob_numba(
+                cell_positions, total_forces, sigmas,
                 self.grid_resolution, self.grid_resolution, self.dx
             )
             self.fluid_velocity = solve_velocity(
                 force_density, mu=self.viscosity, dx=self.dx,
                 alpha=self.brinkman_alpha,
             )
-            precomputed_cell_velocities = interpolate_velocity_numba(
-                self.fluid_velocity, cell_positions, self.dx
+            precomputed_cell_velocities = interpolate_velocity_blob_numba(
+                self.fluid_velocity, cell_positions, sigmas, self.dx
             )
         elif self.hydrodynamics_model == 'dipole':
             self.fluid_velocity[:] = 0.0

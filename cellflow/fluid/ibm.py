@@ -58,6 +58,86 @@ def spread_forces_numba(positions, forces, ny, nx, dx):
     return fd
 
 
+@njit(cache=True)
+def spread_forces_blob_numba(positions, forces, sigmas, ny, nx, dx, n_sigma=3.0):
+    """Spread point forces using a per-cell Gaussian blob of PHYSICAL width
+    sigma_k (set by the cell radius), rather than the grid-tied Peskin kernel.
+
+    Because the regularization width is physical, the induced flow (and the
+    resulting single-cell self-mobility) converges under grid refinement
+    (see issue #16). The kernel is normalized per cell so the discrete integral
+    sum(force_density)*dx^2 == sum(forces) exactly. Periodic in both axes.
+    """
+    fd = np.zeros((ny, nx, 2))
+    inv_area = 1.0 / (dx * dx)
+    for k in range(positions.shape[0]):
+        sx = sigmas[k]
+        two_s2 = 2.0 * sx * sx
+        px, py = positions[k, 0], positions[k, 1]
+        i0 = int(np.floor(px / dx))
+        j0 = int(np.floor(py / dx))
+        rad = int(np.ceil(n_sigma * sx / dx))
+        # pass 1: normalization over the (unwrapped) support
+        W = 0.0
+        for di in range(-rad, rad + 1):
+            ddx = (i0 + di) * dx - px
+            for dj in range(-rad, rad + 1):
+                ddy = (j0 + dj) * dx - py
+                W += np.exp(-(ddx * ddx + ddy * ddy) / two_s2)
+        if W == 0.0:
+            continue
+        norm = 1.0 / (W * dx * dx)        # ensures sum(f*dA) == F
+        # pass 2: deposit (wrap indices for periodicity; distance uses unwrapped)
+        for di in range(-rad, rad + 1):
+            ix = i0 + di
+            ddx = ix * dx - px
+            ixw = ix % nx
+            for dj in range(-rad, rad + 1):
+                jy = j0 + dj
+                ddy = jy * dx - py
+                w = np.exp(-(ddx * ddx + ddy * ddy) / two_s2) * norm
+                jyw = jy % ny
+                fd[jyw, ixw, 0] += forces[k, 0] * w
+                fd[jyw, ixw, 1] += forces[k, 1] * w
+    return fd
+
+
+@njit(parallel=True, cache=True)
+def interpolate_velocity_blob_numba(u, positions, sigmas, dx, n_sigma=3.0):
+    """Interpolate the grid velocity to cells with the same per-cell Gaussian
+    blob used for spreading. Weights are normalized to sum to 1 (partition of
+    unity), so a uniform field is recovered exactly."""
+    n = positions.shape[0]
+    ny, nx, _ = u.shape
+    vel = np.zeros((n, 2))
+    for k in prange(n):
+        sx = sigmas[k]
+        two_s2 = 2.0 * sx * sx
+        px, py = positions[k, 0], positions[k, 1]
+        i0 = int(np.floor(px / dx))
+        j0 = int(np.floor(py / dx))
+        rad = int(np.ceil(n_sigma * sx / dx))
+        W = 0.0
+        vx = 0.0
+        vy = 0.0
+        for di in range(-rad, rad + 1):
+            ix = i0 + di
+            ddx = ix * dx - px
+            ixw = ix % nx
+            for dj in range(-rad, rad + 1):
+                jy = j0 + dj
+                ddy = jy * dx - py
+                w = np.exp(-(ddx * ddx + ddy * ddy) / two_s2)
+                jyw = jy % ny
+                W += w
+                vx += u[jyw, ixw, 0] * w
+                vy += u[jyw, ixw, 1] * w
+        if W > 0.0:
+            vel[k, 0] = vx / W
+            vel[k, 1] = vy / W
+    return vel
+
+
 @njit(parallel=True, cache=True)
 def interpolate_velocity_numba(u, positions, dx):
     """Interpolate a periodic grid velocity field back to cell positions.

@@ -1,7 +1,12 @@
 """Tests for the Immersed Boundary spreading / interpolation kernels."""
 import numpy as np
 
-from cellflow.fluid.ibm import spread_forces_numba, interpolate_velocity_numba
+from cellflow.fluid.ibm import (
+    spread_forces_numba,
+    interpolate_velocity_numba,
+    spread_forces_blob_numba,
+    interpolate_velocity_blob_numba,
+)
 
 
 def test_spread_conserves_total_force():
@@ -47,3 +52,29 @@ def test_spread_then_interpolate_is_symmetric_pairing():
     interp = interpolate_velocity_numba(g, X, dx)  # interp(g)(X)
     rhs = F[0] @ interp[0]
     np.testing.assert_allclose(lhs, rhs, atol=1e-12)
+
+
+def test_blob_spread_conserves_total_force():
+    """Gaussian-blob spreading (physical width) conserves total force."""
+    dx = 0.5
+    ny = nx = 80
+    positions = np.array([[12.0, 14.0], [20.3, 18.7], [9.0, 25.1]])
+    forces = np.array([[1.0, -2.0], [0.5, 0.5], [-1.5, 1.0]])
+    sigmas = np.array([2.0, 3.0, 2.5])
+    fd = spread_forces_blob_numba(positions, forces, sigmas, ny, nx, dx)
+    total = fd.sum(axis=(0, 1)) * dx * dx
+    np.testing.assert_allclose(total, forces.sum(axis=0), atol=1e-9)
+
+
+def test_blob_interpolation_of_uniform_field_is_exact():
+    """Blob interpolation weights are a partition of unity."""
+    dx = 0.5
+    ny = nx = 64
+    u = np.empty((ny, nx, 2))
+    u[:, :, 0] = 2.5
+    u[:, :, 1] = -0.7
+    positions = np.array([[10.2, 17.9], [20.0, 20.0]])
+    sigmas = np.array([2.0, 3.5])
+    vel = interpolate_velocity_blob_numba(u, positions, sigmas, dx)
+    np.testing.assert_allclose(vel[:, 0], 2.5, atol=1e-10)
+    np.testing.assert_allclose(vel[:, 1], -0.7, atol=1e-10)
