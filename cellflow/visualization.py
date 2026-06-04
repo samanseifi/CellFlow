@@ -5,22 +5,32 @@ matplotlib backend to "Agg" before importing pyplot for batch/cron runs.
 """
 import os
 
+import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
 import imageio
 
 
 def render_frame(nutrient_field, cells, physical_size, step, output_dir):
-    """Render one frame (nutrient field + cells) to a PNG and return its path."""
+    """Render one frame (nutrient field + cells) to a PNG and return its path.
+
+    Cells are drawn from their shape_axes() (an area-conserving ellipse); with
+    cell-shape mechanics off this is exactly a circle, so default output is
+    unchanged."""
     fig, ax = plt.subplots(figsize=(8, 8))
     ax.imshow(nutrient_field, cmap='viridis', origin='lower',
               extent=[0, physical_size, 0, physical_size])
 
     for cell in cells:
-        circle_outline = plt.Circle(cell.position, cell.radius, color='black', fill=False, lw=1)
+        a, b, angle = cell.shape_axes()
+        # Inscribe the ellipse within the collision radius (scale so the long
+        # axis = radius) so a deformed cell never renders beyond where the
+        # circular mechanics actually keep neighbours apart.
+        scale = cell.radius / max(a, b)
+        a, b = a * scale, b * scale
         color = 'red' if cell.phase == 'DIVISION' else 'white'
-        circle_body = plt.Circle(cell.position, cell.radius, color=color, alpha=0.7)
-        ax.add_artist(circle_body)
-        ax.add_artist(circle_outline)
+        ax.add_patch(Ellipse(cell.position, 2 * a, 2 * b, angle=np.degrees(angle),
+                             color=color, alpha=0.75, ec='black', lw=0.6))
 
     ax.set_title(f'Step: {step}, Cells: {len(cells)}')
     ax.set_xlim(0, physical_size)

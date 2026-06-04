@@ -13,8 +13,11 @@ def setup_central_uniform(config, physical_size, grid_resolution):
     nutrient_field = np.ones((grid_resolution, grid_resolution)) * config.get('nutrient_bc_value', 20.0)
     center = physical_size / 2
     initial_cluster_radius = config.get('initial_cluster_radius', 20.0)
+    ac = config.get('growth_model', 'linear') == 'area_conserving'
     Cell.next_id = 0
-    cells = [Cell(np.array([center, center]) + np.random.randn(2) * initial_cluster_radius) for _ in range(config['num_cells'])]
+    cells = [Cell(np.array([center, center]) + np.random.randn(2) * initial_cluster_radius,
+                  area_conserving=ac)
+             for _ in range(config['num_cells'])]
     return cells, nutrient_field
 
 
@@ -30,18 +33,19 @@ def setup_wound_healing(config, physical_size, grid_resolution):
 
     cell_spacing = config.get('initial_cell_spacing', 5.0)
     y_positions = np.arange(cell_spacing, physical_size, cell_spacing)
+    ac = config.get('growth_model', 'linear') == 'area_conserving'
 
     # Left sheet
     x_positions_left = np.arange(cell_spacing, left_boundary, cell_spacing)
     for x in x_positions_left:
         for y in y_positions:
-            cells.append(Cell(np.array([x, y])))
+            cells.append(Cell(np.array([x, y]), area_conserving=ac))
 
     # Right sheet
     x_positions_right = np.arange(right_boundary, physical_size, cell_spacing)
     for x in x_positions_right:
         for y in y_positions:
-            cells.append(Cell(np.array([x, y])))
+            cells.append(Cell(np.array([x, y]), area_conserving=ac))
 
     return cells, nutrient_field
 

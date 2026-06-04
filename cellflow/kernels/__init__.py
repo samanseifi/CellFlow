@@ -24,6 +24,12 @@ from .neighbors import (
     adhesion_forces_celllist_numba,
     differential_adhesion_celllist_numba,
 )
+from .mechanics import (
+    velocity_gradient_numba,
+    sample_gradient_at_cells_numba,
+    strain_rate_and_axis,
+)
+from .shapes import contact_stress_celllist_numba
 
 __all__ = [
     "diffuse_field_numba",
@@ -44,4 +50,8 @@ __all__ = [
     "repulsion_forces_celllist_numba",
     "adhesion_forces_celllist_numba",
     "differential_adhesion_celllist_numba",
+    "velocity_gradient_numba",
+    "sample_gradient_at_cells_numba",
+    "strain_rate_and_axis",
+    "contact_stress_celllist_numba",
 ]

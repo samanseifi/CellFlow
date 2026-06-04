@@ -13,6 +13,12 @@ from .kernels.forces import (
     resolve_overlaps_numba,
 )
 from .kernels.adhesion import calculate_differential_adhesion_forces_numba
+from .kernels.mechanics import (
+    velocity_gradient_numba,
+    sample_gradient_at_cells_numba,
+    strain_rate_and_axis,
+)
+from .kernels.shapes import contact_stress_celllist_numba
 from .kernels.neighbors import (
     build_cell_list_numba,
     repulsion_forces_celllist_numba,
@@ -73,12 +79,42 @@ class CellSimulation:
         # same forces as the brute-force O(N^2) kernels (to ~1e-10) but scales
         # near-linearly. On by default; set False to force brute force.
         self.use_neighbor_list = bool(config.get('use_neighbor_list', True))
+
+        # Overlap-resolution sweeps per step. More sweeps relax dense/just-divided
+        # packings faster, reducing transient overlaps after division (issue #21).
+        self.overlap_iterations = int(config.get('overlap_iterations', 3))
+
+        # Cell-shape mechanics (issue #22): each cell deforms into an
+        # area-conserving ellipse under deviatoric contact stress, by a linear
+        # viscoelastic law  d(eps)/dt = (chi*stress - eps)/tau, capped at a max
+        # aspect ratio. Mechanics stay circular; shape is the elastic response.
+        self.enable_cell_shape = bool(config.get('enable_cell_shape', False))
+        self.shape_compliance = float(config.get('shape_compliance', 0.012))
+        self.shape_relaxation_time = float(config.get('shape_relaxation_time', 0.6))
+        self.shape_max_aspect = float(config.get('shape_max_aspect', 1.4))
+        if self.enable_cell_shape:
+            print(f"INFO: Cell-shape mechanics ON (compliance={self.shape_compliance:.3g}, "
+                  f"relax_time={self.shape_relaxation_time:.3g}, "
+                  f"max_aspect={self.shape_max_aspect:.3g}).")
         self.adhesion_cutoff_factor = config['adhesion_cutoff_factor']
         self.repulsion_strength = config['repulsion_strength']
         self.division_force_strength = config.get('division_force_strength', 10.0)
 
         self.hydrodynamics_model = config.get('hydrodynamics_model', 'monopole')
         print(f"INFO: Using '{self.hydrodynamics_model}' model for hydrodynamics.")
+
+        # Mechanotransduction (issue #17): cells sense the local fluid strain
+        # rate and align their polarity (nematically) toward the principal
+        # strain axis at a rate proportional to shear. Optionally, polarity
+        # drives an active propulsion (rheotaxis-like); off by default so the
+        # sensing physics can be verified in isolation.
+        self.enable_mechanotransduction = bool(config.get('enable_mechanotransduction', False))
+        self.shear_alignment_rate = float(config.get('shear_alignment_rate', 1.0))
+        self.polarity_propulsion_force = float(config.get('polarity_propulsion_force', 0.0))
+        if self.enable_mechanotransduction:
+            print(f"INFO: Mechanotransduction ON "
+                  f"(alignment rate = {self.shear_alignment_rate:.3g}, "
+                  f"polarity propulsion = {self.polarity_propulsion_force:.3g}).")
 
         # Fluid solver: 'stokeslet' (legacy free-space 2D Stokeslet sum, default)
         # or 'brinkman_fft' (FFT Brinkman solver + Immersed Boundary coupling).
@@ -247,8 +283,59 @@ class CellSimulation:
                         direction = delta / distance
                         division_forces[i] -= force_magnitude * direction
 
+        # Active propulsion along each cell's polarity (mechanotransduction
+        # response, e.g. rheotaxis). Lagged: uses last step's polarity. Off when
+        # polarity_propulsion_force == 0.
+        if self.enable_mechanotransduction and self.polarity_propulsion_force > 0.0:
+            for i, cell in enumerate(self.cells):
+                propulsion_forces[i, 0] += self.polarity_propulsion_force * np.cos(cell.polarity)
+                propulsion_forces[i, 1] += self.polarity_propulsion_force * np.sin(cell.polarity)
+
         monopolar_forces = adhesion_forces + repulsion_forces + division_forces
         return propulsion_forces, monopolar_forces
+
+    def _update_shapes(self, cell_positions, radii):
+        """Evolve each cell's deviatoric strain toward chi * (deviatoric contact
+        stress) by a viscoelastic relaxation, capped at shape_max_aspect.
+
+            eps <- eps + (chi*stress - eps) * dt/tau
+        """
+        if len(radii) == 0:
+            return
+        bin_size = 2.0 * radii.max()      # repulsive contact range
+        order, bin_start, nbx = build_cell_list_numba(
+            cell_positions, self.physical_size, bin_size)
+        sdev = contact_stress_celllist_numba(
+            cell_positions, radii, self.repulsion_strength,
+            order, bin_start, nbx, bin_size)
+        rate = self.dt / self.shape_relaxation_time
+        m_max = 0.5 * np.log(self.shape_max_aspect)
+        chi = self.shape_compliance
+        for i, cell in enumerate(self.cells):
+            cell.exx += (chi * sdev[i, 0] - cell.exx) * rate
+            cell.exy += (chi * sdev[i, 1] - cell.exy) * rate
+            m = np.hypot(cell.exx, cell.exy)
+            if m > m_max:
+                f = m_max / m
+                cell.exx *= f
+                cell.exy *= f
+
+    def _update_polarity(self, cell_positions, radii):
+        """Align each cell's polarity nematically toward the local fluid strain
+        axis at a rate proportional to the shear magnitude:
+
+            dphi/dt = -k * shear_rate * sin(2 (phi - axis))
+
+        with k = shear_alignment_rate. Fixed point at phi = axis (stable),
+        phi = axis + pi/2 (unstable). Uses the just-solved fluid velocity.
+        """
+        grad = velocity_gradient_numba(self.fluid_velocity, self.dx)
+        cell_grad = sample_gradient_at_cells_numba(cell_positions, radii, grad, self.dx)
+        shear_rate, axis = strain_rate_and_axis(cell_grad)
+        for i, cell in enumerate(self.cells):
+            dphi = -self.shear_alignment_rate * shear_rate[i] * \
+                np.sin(2.0 * (cell.polarity - axis[i])) * self.dt
+            cell.polarity = (cell.polarity + dphi) % np.pi
 
     def _simulation_step(self):
         if not self.cells:
@@ -300,6 +387,15 @@ class CellSimulation:
                 self.fluid_velocity, cell_positions, total_forces,
                 self.viscosity, self.dx, self.stokeslet_cutoff
             )
+
+        # 3b. Mechanotransduction: cells sense the fluid strain rate and align
+        #     their polarity toward the principal strain axis (issue #17).
+        if self.enable_mechanotransduction:
+            self._update_polarity(cell_positions, radii)
+
+        # 3c. Cell-shape mechanics: deform under contact stress (issue #22).
+        if self.enable_cell_shape:
+            self._update_shapes(cell_positions, radii)
 
         # 4. Check CFL stability for advection (warn once per simulation)
         if not self._cfl_warned:
@@ -376,7 +472,8 @@ class CellSimulation:
     def _resolve_overlaps(self):
         cell_positions = np.array([cell.position for cell in self.cells])
         radii = np.array([cell.radius for cell in self.cells])
-        resolve_overlaps_numba(cell_positions, radii)
+        for _ in range(self.overlap_iterations):
+            resolve_overlaps_numba(cell_positions, radii)
         for i, cell in enumerate(self.cells):
             cell.position = cell_positions[i].copy()
 
