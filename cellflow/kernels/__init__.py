@@ -29,6 +29,7 @@ from .mechanics import (
     sample_gradient_at_cells_numba,
     strain_rate_and_axis,
 )
+from .shapes import contact_stress_celllist_numba
 
 __all__ = [
     "diffuse_field_numba",
@@ -52,4 +53,5 @@ __all__ = [
     "velocity_gradient_numba",
     "sample_gradient_at_cells_numba",
     "strain_rate_and_axis",
+    "contact_stress_celllist_numba",
 ]

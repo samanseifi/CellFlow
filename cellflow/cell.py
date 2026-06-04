@@ -28,6 +28,10 @@ class Cell:
         # gives varied orientations WITHOUT consuming the global RNG stream
         # (which would shift seeded results, breaking reproducibility #11).
         self.polarity = (self.id * 2.399963229728653) % np.pi
+        # Deviatoric shape strain (exx, exy); (0,0) = round. Evolves under
+        # contact stress when cell-shape mechanics are enabled. Area-conserving.
+        self.exx = 0.0
+        self.exy = 0.0
         self.just_divided_timer = just_divided_timer
         self.division_partner_id = -1
         self.division_force_timer = 0
@@ -40,6 +44,16 @@ class Cell:
     def update_phase(self):
         if self.radius >= self.max_radius and self.phase == 'GROWTH':
             self.phase = 'DIVISION'
+
+    def shape_axes(self):
+        """Area-conserving ellipse (semi-major a, semi-minor b, angle in rad)
+        from the deviatoric strain. exx=exy=0 -> a=b=radius (circle).
+        a*b = radius^2 always (area conserved)."""
+        m = np.sqrt(self.exx * self.exx + self.exy * self.exy)
+        a = self.radius * np.exp(m)
+        b = self.radius * np.exp(-m)
+        angle = 0.5 * np.arctan2(self.exy, self.exx)
+        return a, b, angle
 
     def absorb_nutrient(self, nutrient_to_modify, nutrient_to_read, dt, dx):
         return absorb_nutrient_numba(self.position, self.radius, nutrient_to_modify, nutrient_to_read, dt, self.consumption_rate, dx)

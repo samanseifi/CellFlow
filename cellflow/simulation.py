@@ -18,6 +18,7 @@ from .kernels.mechanics import (
     sample_gradient_at_cells_numba,
     strain_rate_and_axis,
 )
+from .kernels.shapes import contact_stress_celllist_numba
 from .kernels.neighbors import (
     build_cell_list_numba,
     repulsion_forces_celllist_numba,
@@ -82,6 +83,19 @@ class CellSimulation:
         # Overlap-resolution sweeps per step. More sweeps relax dense/just-divided
         # packings faster, reducing transient overlaps after division (issue #21).
         self.overlap_iterations = int(config.get('overlap_iterations', 3))
+
+        # Cell-shape mechanics (issue #22): each cell deforms into an
+        # area-conserving ellipse under deviatoric contact stress, by a linear
+        # viscoelastic law  d(eps)/dt = (chi*stress - eps)/tau, capped at a max
+        # aspect ratio. Mechanics stay circular; shape is the elastic response.
+        self.enable_cell_shape = bool(config.get('enable_cell_shape', False))
+        self.shape_compliance = float(config.get('shape_compliance', 0.05))
+        self.shape_relaxation_time = float(config.get('shape_relaxation_time', 0.5))
+        self.shape_max_aspect = float(config.get('shape_max_aspect', 2.5))
+        if self.enable_cell_shape:
+            print(f"INFO: Cell-shape mechanics ON (compliance={self.shape_compliance:.3g}, "
+                  f"relax_time={self.shape_relaxation_time:.3g}, "
+                  f"max_aspect={self.shape_max_aspect:.3g}).")
         self.adhesion_cutoff_factor = config['adhesion_cutoff_factor']
         self.repulsion_strength = config['repulsion_strength']
         self.division_force_strength = config.get('division_force_strength', 10.0)
@@ -280,6 +294,32 @@ class CellSimulation:
         monopolar_forces = adhesion_forces + repulsion_forces + division_forces
         return propulsion_forces, monopolar_forces
 
+    def _update_shapes(self, cell_positions, radii):
+        """Evolve each cell's deviatoric strain toward chi * (deviatoric contact
+        stress) by a viscoelastic relaxation, capped at shape_max_aspect.
+
+            eps <- eps + (chi*stress - eps) * dt/tau
+        """
+        if len(radii) == 0:
+            return
+        bin_size = 2.0 * radii.max()      # repulsive contact range
+        order, bin_start, nbx = build_cell_list_numba(
+            cell_positions, self.physical_size, bin_size)
+        sdev = contact_stress_celllist_numba(
+            cell_positions, radii, self.repulsion_strength,
+            order, bin_start, nbx, bin_size)
+        rate = self.dt / self.shape_relaxation_time
+        m_max = 0.5 * np.log(self.shape_max_aspect)
+        chi = self.shape_compliance
+        for i, cell in enumerate(self.cells):
+            cell.exx += (chi * sdev[i, 0] - cell.exx) * rate
+            cell.exy += (chi * sdev[i, 1] - cell.exy) * rate
+            m = np.hypot(cell.exx, cell.exy)
+            if m > m_max:
+                f = m_max / m
+                cell.exx *= f
+                cell.exy *= f
+
     def _update_polarity(self, cell_positions, radii):
         """Align each cell's polarity nematically toward the local fluid strain
         axis at a rate proportional to the shear magnitude:
@@ -352,6 +392,10 @@ class CellSimulation:
         #     their polarity toward the principal strain axis (issue #17).
         if self.enable_mechanotransduction:
             self._update_polarity(cell_positions, radii)
+
+        # 3c. Cell-shape mechanics: deform under contact stress (issue #22).
+        if self.enable_cell_shape:
+            self._update_shapes(cell_positions, radii)
 
         # 4. Check CFL stability for advection (warn once per simulation)
         if not self._cfl_warned:
