@@ -157,10 +157,14 @@ Adhesion / patterns:
   legacy linear-in-separation band (so a uniform matrix exactly reproduces the
   old kernel) rather than a Morse potential; revisit if a calibrated, smooth
   well is needed. Sorting test confirms like-type clustering over time.
-- **Phase 4 — performance & config (TODO):** neighbor lists (#7), optional
-  pyfftw, fold all new params into the config schema (#6). The O(N^2) adhesion/
-  repulsion loops and the legacy O(grid^2 * N) Stokeslet remain the bottlenecks;
-  the Brinkman path is already O(M log M).
+- **[DONE] Phase 4a — neighbor lists (#7):** `kernels/neighbors.py` adds a
+  counting-sort cell list and cell-list variants of the repulsion / scalar- and
+  differential-adhesion kernels, exact vs brute force to ~1e-10. On by default
+  (`use_neighbor_list`). Benchmark: ~3x at N=500 to ~13x at N=6000, widening
+  with N.
+- **Phase 4b — remaining (TODO):** optional pyfftw for the Brinkman transform;
+  fold all new params into a validated config schema (#6); optionally bin the
+  legacy Stokeslet / sequential overlap-resolution (still O(N^2)).
 
 ## 6. Open questions
 
