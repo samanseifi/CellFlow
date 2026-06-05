@@ -1,0 +1,305 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue}
+
+\definecolor{codebg}{gray}{0.96}
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  breaklines=true,
+  frame=single,
+  columns=fullflexible,
+  showstringspaces=false,
+  keepspaces=true,
+}
+
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{\textbf{CellFlow: User Manual}\\[0.3em]
+\large Installing, configuring, and running simulations}
+\author{CellFlow project}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\bigskip
+
+\section{What is CellFlow?}
+CellFlow simulates a population of cells that grow, divide, move, consume
+nutrient, adhere to and push one another, and interact with a surrounding
+low-Reynolds fluid. It can additionally model cells that sense fluid shear, that
+deform under pressure, and that deposit extracellular matrix which reshapes the
+fluid. The mathematics is described in the companion \emph{Technical Manual};
+this document explains how to use the software.
+
+\section{Installation}
+
+\paragraph{Requirements.} Python 3.10+, with \code{numpy}, \code{numba},
+\code{matplotlib}, and \code{imageio}. A conda environment file is provided.
+
+\begin{lstlisting}[language=bash]
+# clone, then create the environment
+conda env create -f cellflow_env.yml
+conda activate base    # (or the env named in the file)
+
+# verify the install by running the test suite
+python -m pytest -q
+\end{lstlisting}
+
+CellFlow is used as a package; run scripts from the repository root so that
+\code{import cellflow} resolves.
+
+\section{Quick start}
+
+A minimal simulation: a small cluster of cells in a nutrient bath, run for a few
+hundred steps with an output GIF.
+
+\begin{lstlisting}[language=Python]
+from cellflow.cellflow_core import CellSimulation
+
+config = {
+    'initial_setup_type': 'central_uniform',
+    'num_cells': 8,
+    'physical_size': 100.0,
+    'grid_resolution': 100,
+    'dt': 0.05,
+    'nutrient_bc_type': 'dirichlet',
+    'nutrient_bc_value': 80.0,
+    'nutrient_D': 0.6,
+    'chi_nutrient': 6.0,
+    'walk_speed': 0.3,
+    'max_propulsive_force': 12.0,
+    'viscosity': 100.0,
+    'adhesion_strength': 0.4,
+    'adhesion_cutoff_factor': 1.5,
+    'repulsion_strength': 60.0,
+    'attractant_D': 0.0,
+    'chi_attractant': 0.0,
+    'fluid_model': 'brinkman_fft',
+    'brinkman_screening_length': 15.0,
+    'growth_model': 'area_conserving',
+    'enable_visualization': True,
+    'seed': 7,
+}
+
+sim = CellSimulation(config, config_name='quickstart')
+sim.run_simulation(steps=400, save_interval=8)
+\end{lstlisting}
+
+This writes per-step state to \code{simulation\_data\_quickstart/} (compressed
+\code{.npz}) and, because \code{enable\_visualization} is on, assembles
+\code{quickstart\_simulation.gif}.
+
+\section{Running a simulation}
+
+\begin{lstlisting}[language=Python]
+sim = CellSimulation(config, config_name='myrun')
+sim.run_simulation(steps=500, save_interval=10)
+\end{lstlisting}
+
+\begin{itemize}
+  \item \code{steps}: number of time steps.
+  \item \code{save\_interval}: save state (and a frame, if visualization is on)
+        every this many steps.
+  \item Output directory: \code{simulation\_data\_<config\_name>/}.
+  \item \code{seed}: set it for reproducible, thread-count-independent runs.
+\end{itemize}
+
+\paragraph{Outputs.} Each saved \code{.npz} contains cell positions, velocities,
+radii, ids, accumulated nutrients, the nutrient/attractant/fluid fields, and the
+config. Load with \code{numpy.load(path, allow\_pickle=True)}.
+
+\section{Initial conditions}
+Set by \code{initial\_setup\_type}:
+\begin{itemize}
+  \item \code{'central\_uniform'}: \code{num\_cells} cells in a Gaussian cluster
+        of radius \code{initial\_cluster\_radius} at the centre.
+  \item \code{'wound\_healing'}: two cell sheets (spacing
+        \code{initial\_cell\_spacing}) separated by a gap of width
+        \code{wound\_gap\_width} (a scratch assay).
+\end{itemize}
+
+\section{Configuration reference}
+
+All parameters are passed in the \code{config} dictionary. Defaults are used when
+a key is omitted (required keys have no default).
+
+\subsection{Simulation control and domain}
+\begin{longtable}{p{0.30\textwidth} p{0.16\textwidth} p{0.46\textwidth}}
+\toprule
+Key & Default & Meaning \\ \midrule \endhead
+\code{initial\_setup\_type} & \code{'central\_uniform'} & initial condition \\
+\code{physical\_size} & \emph{required} & domain side length $L$ \\
+\code{grid\_resolution} & \emph{required} & grid points per axis $G$ \\
+\code{dt} & \emph{required} & time step $\Delta t$ \\
+\code{seed} & \code{None} & RNG seed (set for reproducibility) \\
+\code{enable\_visualization} & \code{False} & render frames and a GIF \\
+\code{num\_cells} & \emph{required*} & cluster cell count (central\_uniform) \\
+\code{initial\_cluster\_radius} & \code{20.0} & cluster spread (central\_uniform) \\
+\code{wound\_gap\_width} & \code{80.0} & gap width (wound\_healing) \\
+\code{initial\_cell\_spacing} & \code{5.0} & sheet spacing (wound\_healing) \\
+\bottomrule
+\end{longtable}
+
+\subsection{Chemical fields}
+\begin{longtable}{p{0.30\textwidth} p{0.16\textwidth} p{0.46\textwidth}}
+\toprule
+Key & Default & Meaning \\ \midrule \endhead
+\code{nutrient\_bc\_type} & \code{'neumann'} & \code{'neumann'} (no-flux) or \code{'dirichlet'} (reservoir) \\
+\code{nutrient\_bc\_value} & \code{20.0} & reservoir/initial nutrient level \\
+\code{nutrient\_D} & \emph{required} & nutrient diffusivity \\
+\code{chi\_nutrient} & \emph{required} & chemotactic sensitivity to nutrient \\
+\code{attractant\_D} & \emph{required} & attractant diffusivity (set 0 if unused) \\
+\code{chi\_attractant} & \emph{required} & attractant chemotaxis (set 0 if unused) \\
+\bottomrule
+\end{longtable}
+
+\subsection{Motility and mechanics}
+\begin{longtable}{p{0.30\textwidth} p{0.16\textwidth} p{0.46\textwidth}}
+\toprule
+Key & Default & Meaning \\ \midrule \endhead
+\code{walk\_speed} & \emph{required} & random-walk speed ($0 \Rightarrow$ deterministic) \\
+\code{max\_propulsive\_force} & \emph{required} & propulsion force magnitude \\
+\code{adhesion\_strength} & \code{0.0} & scalar adhesion strength \\
+\code{adhesion\_cutoff\_factor} & \emph{required} & adhesion band as a multiple of contact \\
+\code{repulsion\_strength} & \emph{required} & volume-exclusion stiffness \\
+\code{division\_force\_strength} & \code{10.0} & post-division separating force \\
+\code{overlap\_iterations} & \code{3} & overlap-resolution sweeps per step \\
+\code{use\_neighbor\_list} & \code{True} & linked-cell acceleration of pairwise forces \\
+\bottomrule
+\end{longtable}
+
+\subsection{Differential adhesion (cell sorting)}
+\begin{longtable}{p{0.30\textwidth} p{0.16\textwidth} p{0.46\textwidth}}
+\toprule
+Key & Default & Meaning \\ \midrule \endhead
+\code{adhesion\_matrix} & \emph{none} & $K\times K$ type-pair adhesion matrix (enables types) \\
+\code{cell\_type\_assignment} & \code{'random'} & \code{'random'} or \code{'left\_right'} \\
+\code{cell\_type\_fractions} & uniform & population fractions for random assignment \\
+\bottomrule
+\end{longtable}
+
+\subsection{Hydrodynamics}
+\begin{longtable}{p{0.30\textwidth} p{0.16\textwidth} p{0.46\textwidth}}
+\toprule
+Key & Default & Meaning \\ \midrule \endhead
+\code{viscosity} & \emph{required} & fluid viscosity $\mu$ \\
+\code{fluid\_model} & \code{'stokeslet'} & \code{'stokeslet'} (legacy) or \code{'brinkman\_fft'} \\
+\code{hydrodynamics\_model} & \code{'monopole'} & \code{'monopole'} or \code{'dipole'} (stokeslet path) \\
+\code{stokeslet\_cutoff} & \code{-1.0} & spatial cutoff for the Stokeslet sum (off if $\le 0$) \\
+\code{brinkman\_screening\_length} & \code{10\,$\Delta x$} & screening length $\delta=\sqrt{\mu/\alpha}$ \\
+\code{ibm\_reg\_factor} & \code{1.0} & IBM blob width as a multiple of cell radius \\
+\bottomrule
+\end{longtable}
+
+\subsection{Growth model}
+\begin{longtable}{p{0.30\textwidth} p{0.16\textwidth} p{0.46\textwidth}}
+\toprule
+Key & Default & Meaning \\ \midrule \endhead
+\code{growth\_model} & \code{'linear'} & \code{'linear'} (legacy) or \code{'area\_conserving'} (recommended) \\
+\bottomrule
+\end{longtable}
+
+\subsection{Mechanotransduction (shear sensing)}
+\begin{longtable}{p{0.30\textwidth} p{0.16\textwidth} p{0.46\textwidth}}
+\toprule
+Key & Default & Meaning \\ \midrule \endhead
+\code{enable\_mechanotransduction} & \code{False} & cells sense fluid shear and align polarity \\
+\code{shear\_alignment\_rate} & \code{1.0} & polarity alignment rate constant \\
+\code{polarity\_propulsion\_force} & \code{0.0} & active force along polarity (rheotaxis; 0 = off) \\
+\bottomrule
+\end{longtable}
+
+\subsection{Cell-shape mechanics (oval deformation)}
+\begin{longtable}{p{0.30\textwidth} p{0.16\textwidth} p{0.46\textwidth}}
+\toprule
+Key & Default & Meaning \\ \midrule \endhead
+\code{enable\_cell\_shape} & \code{False} & cells deform into ellipses under contact stress \\
+\code{shape\_compliance} & \code{0.012} & strain per unit deviatoric stress \\
+\code{shape\_relaxation\_time} & \code{0.6} & viscoelastic relaxation time \\
+\code{shape\_max\_aspect} & \code{1.4} & cap on the aspect ratio \\
+\bottomrule
+\end{longtable}
+
+\subsection{Dynamic ECM (poroelastic)}
+\begin{longtable}{p{0.30\textwidth} p{0.16\textwidth} p{0.46\textwidth}}
+\toprule
+Key & Default & Meaning \\ \midrule \endhead
+\code{enable\_ecm} & \code{False} & cells deposit matrix that raises local drag \\
+\code{ecm\_secretion\_rate} & \code{1.0} & ECM deposited per cell per unit time \\
+\code{ecm\_decay\_rate} & \code{0.01} & ECM decay rate \\
+\code{ecm\_drag\_coeff} & \code{0.5} & drag added per unit ECM density \\
+\bottomrule
+\end{longtable}
+\emph{Note:} ECM requires \code{fluid\_model='brinkman\_fft'} and is efficient
+for moderate drag contrast.
+
+\section{Worked examples}
+
+\subsection{Cluster growth (accurate sizes)}
+Set \code{growth\_model='area\_conserving'} so daughters are correctly sized
+($R/\sqrt2$). With \code{enable\_cell\_shape=True} cells visibly deform under
+packing pressure. See \code{experiments/cluster\_growth.py}.
+
+\subsection{Cell sorting}
+Provide an adhesion matrix with strong self-adhesion and weak cross-adhesion,
+e.g. \code{'adhesion\_matrix': [[4,0],[0,4]]}, and
+\code{'cell\_type\_assignment': 'random'}. Like cells cluster over time. See
+\code{experiments/} and the differential-adhesion tests.
+
+\subsection{Wound healing}
+Use \code{initial\_setup\_type='wound\_healing'}; drive closure with chemotaxis
+or proliferation. See \code{experiments/wound\_closure\_hydro.py} and the
+mobility-controlled, seed-averaged variants.
+
+\subsection{Viscosity and the fluid}
+With \code{fluid\_model='brinkman\_fft'}, cell speed scales as $1/\mu$ at fixed
+screening length; fixing the substrate drag instead makes the coupling
+\emph{range} grow with $\mu$. See \code{experiments/viscosity\_*.py}.
+
+\subsection{Mechanotransduction and ECM}
+Turn on \code{enable\_mechanotransduction} to have cells align to flow shear, and
+\code{enable\_ecm} to have them reshape the fluid permeability. See
+\code{experiments/mechanotransduction\_demo.py} and
+\code{experiments/ecm\_poroelastic\_demo.py}.
+
+\section{The \texttt{experiments/} directory}
+The repository ships runnable studies and demos (each writes a figure or GIF):
+cluster growth, viscosity sweeps and migration, coupling-range, wound closure
+(including a rigorous mobility-controlled and seed-averaged version),
+convergence diagnostics, mechanotransduction, and the poroelastic ECM demos. See
+\code{experiments/README.md} for the catalogue.
+
+\section{Reproducibility and testing}
+\begin{itemize}
+  \item Set \code{seed} for bit-for-bit reproducible runs (independent of the
+        number of CPU threads).
+  \item Run the test suite with \code{python -m pytest}. Analytic solver
+        verification and convergence checks live in \code{tests/benchmarks/}.
+\end{itemize}
+
+\section{Tips and common pitfalls}
+\begin{itemize}
+  \item \textbf{Diffusion blow-up:} keep $D\,\Delta t/\Delta x^2 \le 1/4$; the
+        code warns otherwise. Reduce \code{dt} or coarsen the grid.
+  \item \textbf{CFL warning:} if advection looks unstable, reduce \code{dt}.
+  \item \textbf{``Hydro off'':} the legacy way of suppressing hydrodynamics was
+        a huge viscosity; prefer \code{fluid\_model='brinkman\_fft'} with a
+        chosen screening length for a physical, fast fluid.
+  \item \textbf{Slow ECM runs:} the poroelastic solver iterates more as the drag
+        contrast grows; keep \code{ecm\_drag\_coeff} and ECM build-up moderate.
+  \item \textbf{Accurate sizes:} use \code{growth\_model='area\_conserving'};
+        the legacy linear model is not area-conserving at division.
+  \item \textbf{Reproducibility of stochastic studies:} vary \code{seed} across
+        an ensemble and report statistics rather than single runs.
+\end{itemize}
+
+\end{document}
