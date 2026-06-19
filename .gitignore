@@ -11,6 +11,13 @@ simulation_data_*/
 # Test / tooling caches
 .pytest_cache/
 
+# LaTeX build artifacts (docs)
+*.pdf
+*.aux
+*.log
+*.out
+*.toc
+
 # Python package leftovers
 __pycache__/
 *.pyc

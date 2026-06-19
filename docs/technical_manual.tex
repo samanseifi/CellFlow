@@ -1,0 +1,426 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{bm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue}
+
+\newcommand{\vu}{\bm{u}}
+\newcommand{\vf}{\bm{f}}
+\newcommand{\vx}{\bm{x}}
+\newcommand{\vk}{\bm{k}}
+\newcommand{\vr}{\bm{r}}
+\newcommand{\grad}{\nabla}
+\newcommand{\dt}{\Delta t}
+\newcommand{\dx}{\Delta x}
+
+\title{\textbf{CellFlow: Technical Manual}\\[0.3em]
+\large A hydrodynamically coupled agent-based cell biophysics simulator}
+\author{CellFlow project}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\bigskip
+
+\section{Overview}
+
+CellFlow is a two-dimensional, agent-based simulator that couples discrete
+cells to continuous chemical fields and to a low-Reynolds-number fluid. Each
+cell is an autonomous agent that grows, divides, dies, consumes and secretes
+chemicals, and interacts mechanically with its neighbours. The distinguishing
+feature of CellFlow is a \emph{two-way} coupling to the fluid: cells exert
+forces on the fluid, the fluid transports the chemical fields and moves the
+cells, cells \emph{sense} the local fluid shear (mechanotransduction), and cells
+\emph{remodel} the fluid's permeability by depositing extracellular matrix.
+
+The state of the system at time $t$ consists of
+\begin{itemize}
+  \item a population of cells $\{c_i\}$, each with position $\vx_i$, radius
+        $R_i$, accumulated nutrient $n_i$, polarity $\phi_i$, deviatoric shape
+        strain $\bm{\varepsilon}_i$, cell type $\tau_i$, and phase;
+  \item scalar fields on a uniform grid: nutrient $N(\vx)$, attractant
+        $A(\vx)$, and extracellular matrix density $E(\vx)$;
+  \item the fluid velocity field $\vu(\vx)$ and drag field $\alpha(\vx)$.
+\end{itemize}
+
+Throughout, the domain is the square $[0,L]^2$ discretized into a
+$G\times G$ grid with spacing $\dx = L/G$. Time advances in steps of size $\dt$.
+
+\section{The simulation step}\label{sec:step}
+
+One time step executes the following operations in order
+(see \texttt{CellSimulation.\_simulation\_step}):
+\begin{enumerate}
+  \item Assemble cell arrays (positions, radii).
+  \item Compute forces: chemotactic propulsion, adhesion, repulsion, and
+        post-division forces (Section~\ref{sec:forces}).
+  \item Solve the fluid velocity from the force distribution
+        (Section~\ref{sec:fluid}).
+  \item[3b.] Mechanotransduction: update cell polarity from the fluid strain
+        rate (Section~\ref{sec:mechano}).
+  \item[3c.] Cell-shape mechanics: update deviatoric strain from contact stress
+        (Section~\ref{sec:shape}).
+  \item Check the advective CFL condition.
+  \item Advect the scalar fields with the fluid velocity.
+  \item Diffuse the scalar fields.
+  \item Cell biology: nutrient uptake, secretion, metabolism, growth, phase,
+        death (Section~\ref{sec:biology}).
+  \item Move cells with the mobility relation (Section~\ref{sec:motion}).
+  \item Handle division and death; resolve overlaps; enforce boundaries.
+\end{enumerate}
+The fluid is quasi-static (Stokes/Brinkman): it is recomputed each step from the
+instantaneous force distribution, with no time history.
+
+\section{Cell biology}\label{sec:biology}
+
+\subsection{Nutrient and growth}
+Each cell consumes nutrient over its circular footprint at a per-cell rate
+$k_i \sim \mathcal{N}(0.2, 0.05)$, accumulating internal nutrient $n_i$. Per step
+the cell takes up $\Delta n_i^{+}$ (the integrated uptake over its area, capped
+by the locally available nutrient), pays a basal metabolic cost
+$b\,\dt$ with $b=0.02$, and optionally secretes attractant at rate $s=1.0$:
+\begin{equation}
+  n_i \leftarrow n_i + \Delta n_i^{+} - b\,\dt .
+\end{equation}
+A cell dies (is removed) when $n_i < 0$.
+
+\subsection{Size models}
+CellFlow provides two growth laws, selected by \texttt{growth\_model}.
+
+\paragraph{Linear (legacy).} The radius is linear in accumulated nutrient,
+\begin{equation}
+  R_i = \mathrm{clip}\!\left(R_{\min} + n_i\,\frac{R_{\max}-R_{\min}}{100},\,
+  R_{\min},\, R_{\max}\right),
+\end{equation}
+with $R_{\min}=2$, $R_{\max}=4$. Because area $\propto R^2$, area grows
+quadratically in $n_i$, and division (below) is \emph{not} area-conserving.
+
+\paragraph{Area-conserving (recommended for physical fidelity).} The cell
+\emph{area} grows linearly with accumulated nutrient (mass), and the radius is
+recovered from the area:
+\begin{equation}
+  A_i = \pi R_{\max}^2 \,\frac{n_i}{100}, \qquad
+  R_i = \min\!\left(\sqrt{A_i/\pi},\, R_{\max}\right).
+\end{equation}
+At the division threshold ($n_i=100$, $R_i=R_{\max}$), halving $n_i$ halves the
+area, so each of the two daughters has area $A_{\max}/2$ and radius
+$R_{\max}/\sqrt{2}$; the two daughters therefore conserve the mother's area
+exactly.
+
+\subsection{Division and death}
+A cell enters the \texttt{DIVISION} phase when $R_i \ge R_{\max}$. On division it
+halves its accumulated nutrient, returns to \texttt{GROWTH}, and creates a
+daughter placed at contact distance $R_{\text{parent}} + R_{\text{daughter}}$
+along a random unit direction (so the daughter is born just touching, not
+overlapping). The daughter inherits cell type, polarity, and growth mode; its
+deviatoric shape strain starts at zero (a newborn is round). For a brief window
+after division the mother--daughter pair feel a mutual separating force.
+
+\section{Chemical fields}\label{sec:fields}
+
+Each scalar field $c \in \{N, A\}$ obeys advection--diffusion with cellular
+source/sink terms,
+\begin{equation}
+  \frac{\partial c}{\partial t} + \vu\cdot\grad c
+  = D_c \grad^2 c + S_c(\vx,t),
+\end{equation}
+solved by operator splitting each step: advection, then diffusion, then the
+cellular uptake/secretion. Boundary conditions for the nutrient field are
+selectable: \emph{Neumann} (no-flux, isolated system) or \emph{Dirichlet}
+(edges held at a constant reservoir value, modelling an external medium).
+
+\paragraph{Diffusion.} An explicit five-point (FTCS) scheme is used,
+\begin{equation}
+  c^{m+1}_{ij} = c^{m}_{ij}
+  + \frac{D_c \dt}{\dx^2}\left(c_{i-1,j}+c_{i+1,j}+c_{i,j-1}+c_{i,j+1}-4c_{ij}\right),
+\end{equation}
+clamped to be non-negative. It is stable when the diffusion number
+$D_c\dt/\dx^2 \le 1/4$; the code warns when this is violated. Under no-flux
+boundaries the discrete scheme is conservative in the interior (verified) but
+the node-centred ghost treatment is not strictly flux-conservative at the walls.
+
+\paragraph{Advection.} A semi-Lagrangian scheme back-traces each grid point
+along $-\vu\,\dt$ and interpolates bilinearly. It is unconditionally stable but
+diffusive and first-order; it conserves mass in the interior under smooth flow
+(verified to $\sim 10^{-5}$) but loses mass where material is advected into the
+clamped domain boundary.
+
+\section{Cell forces}\label{sec:forces}
+
+Forces on the cells are separated into a \emph{propulsion} component (active,
+chemotactic) and a \emph{monopolar} component (passive, mechanical), so that
+the dipole hydrodynamic model can treat propulsion as force-free.
+
+\paragraph{Chemotactic propulsion.} Each cell samples the area-averaged nutrient
+gradient and combines it with a random walk to set a direction, then propels at
+fixed magnitude $F_{\text{prop}}$:
+\begin{equation}
+  \hat{\vf}_i \propto \chi\,\overline{\grad N}_i + w\,\bm{\eta}_i, \qquad
+  \vf^{\text{prop}}_i = F_{\text{prop}}\,\frac{\hat{\vf}_i}{\lvert\hat{\vf}_i\rvert},
+\end{equation}
+where $\chi$ is the chemotactic coefficient, $w$ the random-walk speed, and
+$\bm{\eta}_i$ standard normal noise. The noise is drawn once per step in the main
+thread (seedable) and passed into the parallel kernel, so results are
+reproducible and independent of thread count.
+
+\paragraph{Repulsion (volume exclusion).} For overlapping cells
+($d_{ij} < R_i + R_j$), with overlap $\delta_{ij}=R_i+R_j-d_{ij}$,
+\begin{equation}
+  \vf^{\text{rep}}_i = -\sum_{j} k_{\text{rep}}\,
+  \exp\!\left(\frac{3\delta_{ij}}{R_i+R_j}\right)\hat{\vr}_{ij},
+\end{equation}
+directed away from the neighbour.
+
+\paragraph{Adhesion.} For cells within an outer band
+$R_i+R_j < d_{ij} < \lambda(R_i+R_j)$ (cutoff factor $\lambda$), an attractive
+force linear in the separation beyond contact,
+\begin{equation}
+  \vf^{\text{adh}}_i = \sum_j k_{\text{adh}}\,(d_{ij}-(R_i+R_j))\,\hat{\vr}_{ij}.
+\end{equation}
+
+\paragraph{Differential adhesion.} With cell types and a symmetric adhesion
+matrix $\bm{D}$, the scalar strength $k_{\text{adh}}$ is replaced by
+$D_{\tau_i\tau_j}$. Following the Differential Adhesion Hypothesis, the
+interfacial tension between types is
+$\sigma_{ab} = D_{ab} - \tfrac{1}{2}(D_{aa}+D_{bb})$, which drives cell sorting
+and engulfment. A uniform matrix reproduces the scalar law exactly.
+
+\paragraph{Neighbour lists.} All pairwise force loops use a uniform linked-cell
+(bin) structure when enabled (default), reducing the cost from $O(N^2)$ to
+$O(N)$; the binned forces are identical to the brute-force result to
+$\sim 10^{-10}$.
+
+\paragraph{Overlap resolution.} After the force-driven move, residual overlaps
+are removed by a sequential geometric projection (each overlapping pair is
+pushed apart by half the overlap), iterated a configurable number of times per
+step. (The degenerate exactly-coincident case is separated along a deterministic
+golden-angle direction, preserving reproducibility.)
+
+\section{Hydrodynamics}\label{sec:fluid}
+
+The fluid is governed by quasi-static, incompressible low-Reynolds flow. Three
+solvers are available, selected by \texttt{fluid\_model} and related options.
+
+\subsection{Free-space regularized Stokeslet (legacy)}
+The velocity is the sum of 2D regularized Stokeslets (Cortez) over the cell
+forces. For a force $\vf$ at $\vx_0$, with $\vr=\vx-\vx_0$,
+$r_\epsilon^2 = \lvert\vr\rvert^2+\epsilon^2$ and regularization
+$\epsilon = 2\dx$,
+\begin{equation}
+  \vu(\vx) = \frac{1}{4\pi\mu}\Big[
+  -\vf\big(\ln r_\epsilon - \tfrac{\epsilon^2}{r_\epsilon^2}\big)
+  + (\vf\cdot\vr)\,\frac{\vr}{r_\epsilon^2}\Big].
+\end{equation}
+A force-dipole variant represents active propulsion as two equal-and-opposite
+Stokeslets (no net force on the fluid). \textbf{Caveat:} in 2D the Stokeslet
+velocity grows like $\ln r$ for a net force (the Stokes paradox), so this model
+has no far-field decay and no confinement; it is retained for backward
+compatibility and force-free (dipole) studies.
+
+\subsection{FFT Brinkman solver (recommended)}
+The preferred model solves the incompressible Brinkman equations on a periodic
+grid,
+\begin{equation}
+  -\mu\grad^2\vu + \alpha\,\vu + \grad p = \vf, \qquad \grad\cdot\vu = 0,
+  \label{eq:brinkman}
+\end{equation}
+where $\mu$ is the viscosity and $\alpha$ the substrate drag. The drag
+introduces a screening length $\delta = \sqrt{\mu/\alpha}$ beyond which
+hydrodynamic interactions decay; this regularizes the 2D paradox. In Fourier
+space, for each wavevector $\vk\neq 0$,
+\begin{equation}
+  \hat{\vu}(\vk) = \frac{\mathsf{P}(\vk)\,\hat{\vf}(\vk)}{\mu\lvert\vk\rvert^2+\alpha},
+  \qquad
+  \mathsf{P}(\vk) = \mathsf{I} - \frac{\vk\vk^{\mathsf{T}}}{\lvert\vk\rvert^2},
+  \label{eq:brinkman-fft}
+\end{equation}
+where $\mathsf{P}$ is the Leray (divergence-free) projection. The mean mode is
+$\hat{\vu}(0)=\hat{\vf}(0)/\alpha$ (finite for $\alpha>0$). The cost is
+$O(M\log M)$ for $M=G^2$ grid points. The Nyquist wavenumber is zeroed on even
+grids so the projection is consistent (otherwise the velocity is not
+divergence-free). The solver is verified against an analytic manufactured
+solution to machine precision and is divergence-free to $\sim 10^{-9}$.
+
+\subsection{Variable-coefficient (poroelastic) Brinkman}
+When cells remodel the matrix (Section~\ref{sec:ecm}), the drag becomes a field
+$\alpha(\vx)$, and \eqref{eq:brinkman} is no longer diagonal in Fourier. Writing
+$\alpha(\vx) = \alpha_0 + d(\vx)$ with $\alpha_0 = \max_{\vx} \alpha(\vx)$ and
+$d \le 0$, the solution satisfies the fixed point
+\begin{equation}
+  \vu = \mathsf{A}_0^{-1}\mathsf{P}\big(\vf - d\,\vu\big),
+\end{equation}
+where $\mathsf{A}_0^{-1}\mathsf{P}$ is precisely the constant-$\alpha_0$ FFT
+solve \eqref{eq:brinkman-fft}. This Picard iteration contracts because
+$\lvert d\rvert/(\mu\lvert\vk\rvert^2+\alpha_0) < 1$, with rate
+$\sim 1 - \alpha_{\min}/\alpha_{\max}$. It is efficient for moderate drag
+contrast; very high contrast would warrant a preconditioned Krylov solver
+(future work). It is verified by constant-$\alpha$ consistency, a
+spatially-varying manufactured solution (to $10^{-6}$), and flow screening
+through a high-drag patch.
+
+\subsection{Immersed Boundary coupling}\label{sec:ibm}
+Cells couple to the grid fluid by the Immersed Boundary Method. A cell force
+$\vf_i$ is \emph{spread} to a grid force density with a per-cell Gaussian blob of
+\emph{physical} width $\sigma_i = \zeta R_i$ (where $\zeta$ is
+\texttt{ibm\_reg\_factor}):
+\begin{equation}
+  \vf(\vx) = \sum_i \vf_i\,\varphi_{\sigma_i}(\vx-\vx_i),
+\end{equation}
+normalized per cell so that total force is conserved exactly. The solved
+velocity is \emph{interpolated} back to each cell with the same kernel,
+\begin{equation}
+  \vu_i = \sum_{\vx} \vu(\vx)\,\hat{\varphi}_{\sigma_i}(\vx-\vx_i),
+\end{equation}
+with weights summing to one (partition of unity), so a uniform field is
+recovered exactly. Tying the regularization to the cell radius (rather than the
+grid spacing, as a grid-width kernel would) makes the single-cell self-mobility
+\emph{grid convergent}: it approaches a finite limit as $\dx\to 0$, whereas a
+grid-tied kernel drifts (logarithmically). The same field $\vu$ both advects the
+scalar fields and moves the cells, removing any kinematic inconsistency.
+
+\subsection{Cell motion}\label{sec:motion}
+In the Brinkman/IBM path, cell velocities are the interpolated fluid velocity at
+the cell centres. In the legacy Stokeslet path, the velocity is a mobility
+relation combining a self term (Stokes drag) and hydrodynamic interactions:
+\begin{equation}
+  \vu_k = \frac{\vf_k}{6\pi\mu R_k}
+  + \sum_{j\neq k} \mathsf{G}_{2D}(\vx_k,\vx_j)\,\vf_j .
+\end{equation}
+Cells advance by forward Euler, $\vx_k \leftarrow \vx_k + \vu_k\,\dt$, which is
+first order in $\dt$ (verified).
+
+\section{Mechanotransduction}\label{sec:mechano}
+
+Cells sense the local fluid shear and reorient. From the solved velocity, the
+velocity-gradient tensor $\grad\vu$ is computed by periodic central differences
+and area-averaged over each cell. The strain-rate tensor is
+$\mathsf{E} = \tfrac{1}{2}(\grad\vu + \grad\vu^{\mathsf{T}})$, from which we
+form the scalar shear rate and the principal (extensional) axis,
+\begin{align}
+  \dot\gamma &= \sqrt{2\,\mathsf{E}\!:\!\mathsf{E}}
+  = \sqrt{2\big(E_{xx}^2+E_{yy}^2+2E_{xy}^2\big)}, \\
+  \psi &= \tfrac{1}{2}\,\mathrm{atan2}\big(2E_{xy},\, E_{xx}-E_{yy}\big).
+\end{align}
+The cell polarity $\phi$ (a nematic director, defined modulo $\pi$) aligns toward
+the strain axis at a rate proportional to the shear,
+\begin{equation}
+  \frac{d\phi}{dt} = -k_\phi\,\dot\gamma\,\sin\!\big(2(\phi-\psi)\big),
+\end{equation}
+with rate constant $k_\phi$ (\texttt{shear\_alignment\_rate}). The stable fixed
+point is $\phi=\psi$. Optionally the polarity drives an active propulsion of
+magnitude \texttt{polarity\_propulsion\_force} (rheotaxis). Verification: under
+analytic simple shear $u=(\dot\gamma\,y,0)$ the sensed shear rate equals
+$\dot\gamma$, the axis is $45^\circ$, and the polarity converges to $45^\circ$;
+zero flow leaves the polarity unchanged.
+
+\section{Cell-shape mechanics}\label{sec:shape}
+
+Cells deform into area-conserving ellipses under contact pressure, while the
+mechanical contacts remain circular (so the cost stays low). For each cell the
+repulsive contact (Cauchy) stress is
+\begin{equation}
+  \bm{\sigma}_i = \frac{1}{A_i}\sum_j \vf_{ij}\otimes\vr_{ij},
+\end{equation}
+with deviatoric part
+$\bm{s}_i = \big(\tfrac{1}{2}(\sigma_{xx}-\sigma_{yy}),\, \sigma_{xy}\big)$. The
+deviatoric strain $\bm{\varepsilon}_i=(\varepsilon_{xx},\varepsilon_{xy})$
+relaxes by a linear viscoelastic law toward $\chi\,\bm{s}_i$,
+\begin{equation}
+  \bm{\varepsilon}_i \leftarrow \bm{\varepsilon}_i
+  + \big(\chi\,\bm{s}_i - \bm{\varepsilon}_i\big)\frac{\dt}{\tau},
+\end{equation}
+capped at a maximum aspect ratio, with compliance $\chi$
+(\texttt{shape\_compliance}) and relaxation time $\tau$
+(\texttt{shape\_relaxation\_time}). The ellipse semi-axes follow from the strain
+magnitude $m=\lvert\bm{\varepsilon}_i\rvert$,
+\begin{equation}
+  a = R_i\,e^{m}, \quad b = R_i\,e^{-m}, \quad
+  \theta = \tfrac{1}{2}\mathrm{atan2}(\varepsilon_{xy},\varepsilon_{xx}),
+\end{equation}
+so that $ab=R_i^2$ (area conserved). Verification: uniaxial compression
+elongates perpendicular to the squeeze and reaches the elastic steady state
+$\bm{\varepsilon}=\chi\bm{s}$; \emph{isotropic} (hydrostatic) pressure produces
+\emph{no} elongation; the shape relaxes back to round when unloaded.
+
+\section{Dynamic extracellular matrix}\label{sec:ecm}
+
+Cells deposit ECM into a grid field $E(\vx)$ over their area; the field decays
+and is mapped to the local Brinkman drag,
+\begin{equation}
+  E \leftarrow (1 - \kappa_d\,\dt)\,E + \text{(cell secretion)}, \qquad
+  \alpha(\vx) = \alpha_{\text{base}} + \kappa_\alpha\,E(\vx),
+\end{equation}
+with secretion rate, decay rate $\kappa_d$, and drag coefficient $\kappa_\alpha$
+set by \texttt{ecm\_secretion\_rate}, \texttt{ecm\_decay\_rate}, and
+\texttt{ecm\_drag\_coeff}. The resulting variable drag field is passed to the
+poroelastic solver, so cell-deposited matrix lowers the local permeability and
+reroutes/screens the flow---the defining cell$\to$fluid feedback (relevant to
+tumour stroma, interstitial flow, and durotaxis).
+
+\section{Numerical methods and stability}
+
+\begin{itemize}
+  \item \textbf{Time integration:} forward Euler for cell positions and the
+        ODE-like polarity/shape relaxations (first order in $\dt$).
+  \item \textbf{Diffusion:} explicit FTCS; stable for $D\dt/\dx^2 \le 1/4$.
+  \item \textbf{Advection:} semi-Lagrangian; the code warns when the CFL number
+        $\max\lvert\vu\rvert\,\dt/\dx > 1$.
+  \item \textbf{Fluid:} spectral (FFT) for Brinkman, $O(M\log M)$; Picard
+        iteration for variable drag.
+  \item \textbf{Pairwise forces:} linked-cell neighbour lists, $O(N)$.
+\end{itemize}
+
+\section{Verification and validation}\label{sec:vv}
+
+CellFlow ships an automated test suite (87 tests) including:
+\begin{itemize}
+  \item \textbf{Solver verification:} a Method of Manufactured Solutions test
+        recovers a multi-mode divergence-free field to machine precision for
+        both constant and spatially-varying drag.
+  \item \textbf{Convergence:} grid refinement studies confirm that the IBM
+        self-mobility and hydrodynamic interactions converge; the timestep error
+        scales as $\dt^1$ (forward Euler); the advection scheme conserves mass
+        in the interior.
+  \item \textbf{Physics checks:} screening monotonicity; mechanotransduction
+        alignment to the correct strain axis; cell-shape response to uniaxial vs
+        isotropic stress; area-conserving division.
+  \item \textbf{Reproducibility:} with a seed, runs are bit-for-bit identical
+        and independent of the thread count.
+\end{itemize}
+\emph{Verification} (solving the equations correctly) is extensive;
+\emph{validation} against experimental data is the user's responsibility for any
+quantitative study, and physical units must be assigned by the user.
+
+\section{Limitations}
+
+\begin{itemize}
+  \item Two spatial dimensions only; periodic (Brinkman) boundaries with
+        screening as a confinement surrogate (no explicit no-slip walls yet).
+  \item Overlap resolution is a geometric projection independent of viscosity;
+        dense-tissue mechanics are therefore not viscosity-resolved.
+  \item The differential-adhesion law is qualitative (not calibrated to a
+        measured surface tension).
+  \item The poroelastic Picard solver is efficient only for moderate drag
+        contrast.
+  \item Results are in arbitrary units unless the user assigns a unit system.
+\end{itemize}
+
+\begin{thebibliography}{9}
+\bibitem{cortez} R.~Cortez, \emph{The method of regularized Stokeslets},
+  SIAM J. Sci. Comput. 23 (2001) 1204--1225.
+\bibitem{peskin} C.~S.~Peskin, \emph{The immersed boundary method},
+  Acta Numerica 11 (2002) 479--517.
+\bibitem{brinkman} H.~C.~Brinkman, \emph{A calculation of the viscous force
+  exerted by a flowing fluid on a dense swarm of particles},
+  Appl. Sci. Res. A1 (1949) 27--34.
+\bibitem{steinberg} M.~S.~Steinberg, \emph{Differential adhesion in
+  morphogenesis}, Curr. Opin. Genet. Dev. 17 (2007) 281--286.
+\end{thebibliography}
+
+\end{document}
