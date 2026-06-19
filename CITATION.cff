@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "CellFlow: A hydrodynamically coupled agent-based cell biophysics simulator"
+authors:
+  - family-names: "Seifi"
+    given-names: "Saman"
+    affiliation: "Boston University"
+version: 0.1.0
+license: MIT
+repository-code: "https://github.com/samanseifi/cellflow"
+keywords:
+  - agent-based model
+  - cell biophysics
+  - Brinkman flow
+  - immersed boundary method
+  - mechanotransduction
+  - morphogenesis

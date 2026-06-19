@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cellflow"
+version = "0.1.0"
+description = "A hydrodynamically coupled agent-based cell biophysics simulator"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Saman Seifi", email = "samansei@bu.edu" },
+]
+keywords = [
+    "agent-based model",
+    "cell biophysics",
+    "Brinkman flow",
+    "immersed boundary method",
+    "mechanotransduction",
+    "morphogenesis",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+    "numpy>=1.24",
+    "numba>=0.58",
+    "matplotlib>=3.6",
+    "imageio>=2.30",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[project.urls]
+Homepage = "https://github.com/samanseifi/cellflow"
+Repository = "https://github.com/samanseifi/cellflow"
+
+[tool.setuptools.packages.find]
+include = ["cellflow*"]

@@ -247,6 +247,30 @@ grids so the projection is consistent (otherwise the velocity is not
 divergence-free). The solver is verified against an analytic manufactured
 solution to machine precision and is divergence-free to $\sim 10^{-9}$.
 
+\subsection{Free-slip box (non-periodic walls)}\label{sec:freeslip}
+Setting \texttt{fluid\_boundary='freeslip\_box'} replaces the periodic boundaries
+with free-slip (no-penetration, stress-free) walls on all four sides of the
+square domain,
+\begin{equation}
+  \vu\cdot\bm{n} = 0, \qquad
+  \big(\mathsf{\sigma}\bm{n}\big)\cdot\bm{t} = 0
+  \quad\text{on each wall.}
+\end{equation}
+A free-slip wall is a plane of mirror symmetry, so the box solution is the
+restriction of a periodic solution on the doubled domain $[0,2L]^2$ whose force
+is extended with the parity $f_x$ odd across the $x$-walls and even across the
+$y$-walls, and $f_y$ even across the $x$-walls and odd across the $y$-walls (the
+extensions underlying the discrete sine/cosine transforms). The Brinkman
+multiplier in \eqref{eq:brinkman-fft} and the Leray projection $\mathsf{P}$ both
+map this symmetry subspace to itself, so the solved velocity inherits the
+symmetry---$u_x$ odd in $x$ and even in $y$, $u_y$ even in $x$ and odd in
+$y$---which is exactly free slip, and remains divergence-free. Reusing the
+verified periodic solver on the mirror-extended grid keeps the cost
+$O(M\log M)$ (a constant factor of $4$). This path is verified against a
+manufactured free-slip mode to machine precision. It is currently restricted to
+constant drag $\alpha$ (not combined with the poroelastic ECM solver), and no-slip
+walls would instead require a Chebyshev/influence-matrix formulation.
+
 \subsection{Variable-coefficient (poroelastic) Brinkman}
 When cells remodel the matrix (Section~\ref{sec:ecm}), the drag becomes a field
 $\alpha(\vx)$, and \eqref{eq:brinkman} is no longer diagonal in Fourier. Writing
@@ -400,8 +424,10 @@ quantitative study, and physical units must be assigned by the user.
 \section{Limitations}
 
 \begin{itemize}
-  \item Two spatial dimensions only; periodic (Brinkman) boundaries with
-        screening as a confinement surrogate (no explicit no-slip walls yet).
+  \item Two spatial dimensions only. Boundaries are either periodic with
+        screening as a confinement surrogate, or free-slip walls on all four
+        sides (Section~\ref{sec:freeslip}); explicit no-slip walls are not yet
+        available.
   \item Overlap resolution is a geometric projection independent of viscosity;
         dense-tissue mechanics are therefore not viscosity-resolved.
   \item The differential-adhesion law is qualitative (not calibrated to a

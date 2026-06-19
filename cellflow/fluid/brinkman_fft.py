@@ -118,6 +118,69 @@ def solve_velocity(force_density, mu, dx, alpha=0.0, screening_length=None):
     return u
 
 
+def _mirror_extend(a, axis, parity):
+    """Half-sample-symmetric mirror extension along ``axis``, doubling its length.
+
+    ``parity = +1`` is an even reflection (the extension underlying the DCT-II),
+    ``parity = -1`` an odd reflection (underlying the DST-II). For cell-centered
+    data ``[a_0, ..., a_{N-1}]`` the result is ``[a_0, ..., a_{N-1}, +/-a_{N-1},
+    ..., +/-a_0]``, placing mirror (symmetry) planes at both ends of the domain.
+    """
+    rev = np.flip(a, axis=axis)
+    if parity < 0:
+        rev = -rev
+    return np.concatenate([a, rev], axis=axis)
+
+
+def solve_velocity_freeslip_box(force_density, mu, dx, alpha=0.0,
+                                screening_length=None):
+    """Incompressible Brinkman/Stokes flow in a box with FREE-SLIP walls.
+
+    Solves the same equations as :func:`solve_velocity` on the domain
+    ``[0, L]^2`` but with free-slip (no-penetration, stress-free) walls on all
+    four sides:
+
+        u . n = 0   and   tangential stress = 0   on each wall.
+
+    A free-slip wall is a plane of mirror symmetry, so the box solution is the
+    restriction of a periodic solution on the doubled domain ``[0, 2L]^2`` whose
+    force has the symmetry
+
+        f_x : odd across the x-walls, even across the y-walls,
+        f_y : even across the x-walls, odd across the y-walls.
+
+    We build that mirror-extended force and reuse the verified periodic solver.
+    The Brinkman multiplier ``1/(mu|k|^2 + alpha)`` and the Leray projection both
+    map this symmetry subspace to itself, so the solved velocity inherits the
+    symmetry (``u_x`` odd in x / even in y, ``u_y`` even in x / odd in y), which
+    is exactly free slip on the box walls, and it is divergence-free. The
+    original quadrant is then cropped out. This is the standard equivalence
+    between a DST/DCT solve and an FFT on mirror-extended data.
+
+    Cost is 4x the periodic solve (a 2N x 2N grid) -- still O(M log M).
+    Parameters match :func:`solve_velocity`; ``force_density`` is (ny, nx, 2).
+    """
+    ny, nx, _ = force_density.shape
+    fx = force_density[:, :, 0]
+    fy = force_density[:, :, 1]
+
+    # axis 0 = y, axis 1 = x.
+    # f_x: odd in x (parity -1, axis 1), even in y (parity +1, axis 0).
+    fx_ext = _mirror_extend(_mirror_extend(fx, axis=1, parity=-1),
+                            axis=0, parity=+1)
+    # f_y: even in x (parity +1, axis 1), odd in y (parity -1, axis 0).
+    fy_ext = _mirror_extend(_mirror_extend(fy, axis=1, parity=+1),
+                            axis=0, parity=-1)
+
+    f_ext = np.empty((2 * ny, 2 * nx, 2), dtype=force_density.dtype)
+    f_ext[:, :, 0] = fx_ext
+    f_ext[:, :, 1] = fy_ext
+
+    u_ext = solve_velocity(f_ext, mu, dx, alpha=alpha,
+                           screening_length=screening_length)
+    return u_ext[:ny, :nx, :].copy()
+
+
 def solve_velocity_variable_alpha(force_density, mu, dx, alpha_field,
                                   tol=1e-7, max_iter=300):
     """Incompressible Brinkman with a SPATIALLY-VARYING drag alpha(x):
