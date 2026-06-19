@@ -1,6 +1,7 @@
 """Grid fluid solvers for CellFlow."""
 from .brinkman_fft import (
     solve_velocity, solve_velocity_variable_alpha,
+    solve_velocity_freeslip_box,
     spectral_divergence, alpha_from_screening_length,
 )
 from .ibm import (
@@ -13,6 +14,7 @@ from .ibm import (
 __all__ = [
     "solve_velocity",
     "solve_velocity_variable_alpha",
+    "solve_velocity_freeslip_box",
     "spectral_divergence",
     "alpha_from_screening_length",
     "spread_forces_numba",

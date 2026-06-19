@@ -32,6 +32,7 @@ from .kernels.stokeslet import (
 )
 from .fluid.brinkman_fft import (
     solve_velocity, solve_velocity_variable_alpha, alpha_from_screening_length,
+    solve_velocity_freeslip_box,
 )
 from .fluid.ibm import spread_forces_blob_numba, interpolate_velocity_blob_numba
 from .kernels.fields import secrete_over_area_numba
@@ -138,9 +139,18 @@ class CellSimulation:
             # ibm_reg_factor * radius), NOT the grid, so single-cell mobility is
             # grid-convergent (issue #16).
             self.ibm_reg_factor = float(config.get('ibm_reg_factor', 1.0))
+            # Fluid boundary condition: 'periodic' (default) or 'freeslip_box'
+            # (free-slip / no-penetration walls on all four sides, via a
+            # mirror-symmetric extension of the periodic solver).
+            self.fluid_boundary = config.get('fluid_boundary', 'periodic')
+            if self.fluid_boundary not in ('periodic', 'freeslip_box'):
+                raise ValueError(
+                    "fluid_boundary must be 'periodic' or 'freeslip_box', "
+                    f"got {self.fluid_boundary!r}")
             print(f"INFO: Fluid solver = Brinkman/FFT+IBM "
                   f"(screening length = {self.brinkman_screening_length:.3g}, "
-                  f"ibm_reg_factor = {self.ibm_reg_factor:.3g}).")
+                  f"ibm_reg_factor = {self.ibm_reg_factor:.3g}, "
+                  f"boundary = '{self.fluid_boundary}').")
         else:
             print(f"INFO: Fluid solver = '{self.fluid_model}' (legacy Stokeslet).")
 
@@ -389,11 +399,21 @@ class CellSimulation:
                 self.grid_resolution, self.grid_resolution, self.dx
             )
             if self.enable_ecm:
+                if self.fluid_boundary != 'periodic':
+                    raise NotImplementedError(
+                        "fluid_boundary='freeslip_box' is not yet supported "
+                        "together with the variable-drag ECM solver; use "
+                        "periodic boundaries with ECM.")
                 alpha_field = self._update_ecm()        # cell-remodeled drag field
                 self.fluid_velocity, self._ecm_iters, self._ecm_residual = \
                     solve_velocity_variable_alpha(
                         force_density, mu=self.viscosity, dx=self.dx,
                         alpha_field=alpha_field)
+            elif self.fluid_boundary == 'freeslip_box':
+                self.fluid_velocity = solve_velocity_freeslip_box(
+                    force_density, mu=self.viscosity, dx=self.dx,
+                    alpha=self.brinkman_alpha,
+                )
             else:
                 self.fluid_velocity = solve_velocity(
                     force_density, mu=self.viscosity, dx=self.dx,
