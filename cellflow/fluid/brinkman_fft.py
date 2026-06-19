@@ -118,6 +118,49 @@ def solve_velocity(force_density, mu, dx, alpha=0.0, screening_length=None):
     return u
 
 
+def solve_velocity_variable_alpha(force_density, mu, dx, alpha_field,
+                                  tol=1e-7, max_iter=300):
+    """Incompressible Brinkman with a SPATIALLY-VARYING drag alpha(x):
+
+        -mu*lap(u) + alpha(x) u + grad(p) = f,   div(u) = 0.
+
+    Variable alpha is not diagonal in Fourier, so we split alpha = alpha0 + d(x)
+    with alpha0 = max(alpha) and iterate (Picard), using the constant-alpha FFT
+    solver A^{-1}P as the inner solve:
+
+        u <- A0^{-1} P ( f - d(x) u ) ,   A0 = -mu*lap + alpha0.
+
+    Because d <= 0 and |d|/(mu|k|^2 + alpha0) < 1, the iteration contracts, with
+    rate ~ (1 - alpha_min/alpha_max). It is therefore efficient for MODERATE
+    drag contrast (a few x); very high contrast (>~50x) converges slowly and
+    would warrant a preconditioned Krylov solver (future work). Returns
+    (u, iterations, residual).
+
+    Parameters
+    ----------
+    alpha_field : (ny, nx) array of non-negative drag values.
+    """
+    alpha0 = float(np.max(alpha_field))
+    if alpha0 <= 0.0:
+        # uniform Stokes (alpha == 0 everywhere)
+        return solve_velocity(force_density, mu, dx, alpha=0.0), 1, 0.0
+    delta = (alpha_field - alpha0)[:, :, None]      # <= 0, shape (ny,nx,1)
+
+    u = solve_velocity(force_density, mu, dx, alpha=alpha0)
+    residual = 0.0
+    iters = 0
+    for it in range(max_iter):
+        iters = it + 1
+        rhs = force_density - delta * u
+        u_new = solve_velocity(rhs, mu, dx, alpha=alpha0)
+        denom = np.max(np.abs(u_new)) + 1e-30
+        residual = np.max(np.abs(u_new - u)) / denom
+        u = u_new
+        if residual < tol:
+            break
+    return u, iters, residual
+
+
 def spectral_divergence(u, dx):
     """Return the divergence field of ``u`` computed spectrally (for tests)."""
     ux_hat = np.fft.fft2(u[:, :, 0])

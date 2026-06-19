@@ -142,6 +142,21 @@ def test_different_seed_diverges(in_tmp_dir):
     assert not np.allclose(pa, pb)
 
 
+def test_ecm_accumulates_and_raises_drag(in_tmp_dir):
+    """With ECM on, cells deposit matrix -> the ecm field grows where cells are,
+    and the run stays finite (variable-alpha solver converges each step)."""
+    cfg = _base_config(fluid_model='brinkman_fft', viscosity=1.0,
+                       brinkman_screening_length=10.0, enable_ecm=True,
+                       ecm_secretion_rate=2.0, ecm_decay_rate=0.0,
+                       ecm_drag_coeff=0.5, seed=3)
+    sim = CellSimulation(cfg, config_name='ecm')
+    assert sim.ecm_field.sum() == 0.0
+    sim.run_simulation(steps=6, save_interval=100)
+    assert sim.ecm_field.sum() > 0.0                 # matrix deposited
+    assert np.all(np.isfinite(sim.fluid_velocity))
+    assert sim._ecm_residual < 1e-5                  # solver converged
+
+
 def test_backward_compat_import():
     """The old monolithic import path must still resolve to the same class."""
     from cellflow.cellflow_core import CellSimulation as Legacy
