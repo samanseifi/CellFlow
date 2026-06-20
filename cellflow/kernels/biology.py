@@ -18,17 +18,28 @@ from .fields import absorb_nutrient_numba, secrete_over_area_numba
 
 @njit(cache=True)
 def cell_biology_step_numba(positions, radii, nutrient_acc, consumption_rate,
-                            secretion_rate, basal_rate,
+                            secretion_rate, basal_rate, active,
                             nutrient_field, nutrient_read, attractant_field,
-                            dt, dx, area_conserving, min_radius, max_radius):
+                            dt, dx, area_conserving, min_radius, max_radius,
+                            enable_quiescence, quiescence_threshold):
     """Advance one biology step for all cells, in place.
 
-    Updates ``nutrient_acc`` and ``radii`` in place, modifies the nutrient and
-    attractant fields, and returns two boolean arrays:
+    Updates ``nutrient_acc``, ``radii`` and the ``active`` flags in place,
+    modifies the nutrient and attractant fields, and returns:
         reached_division[k] : radius reached max_radius (eligible for division)
         alive[k]            : False if the cell's accumulated nutrient went < 0.
+
+    Active<->passive transition (issue: bacterial-colony branching needs a
+    motility/growth state switch). When ``enable_quiescence`` is set, a cell
+    goes QUIESCENT where the local nutrient falls below ``quiescence_threshold``
+    and reactivates above twice that (hysteresis). Quiescent cells still take up
+    nutrient (so the interior stays depleted, shadowing the valleys) but do not
+    grow, divide, metabolise, or -- via the propulsion gate in the simulation --
+    move. This concentrates growth at the nutrient-exposed rim and lets the
+    front finger, as in the continuum models.
     """
     n = positions.shape[0]
+    ny, nx = nutrient_read.shape
     reached_division = np.zeros(n, dtype=np.bool_)
     alive = np.ones(n, dtype=np.bool_)
     area_floor = np.pi * (0.5 * min_radius) ** 2
@@ -36,14 +47,27 @@ def cell_biology_step_numba(positions, radii, nutrient_acc, consumption_rate,
     a_max = np.pi * max_radius ** 2
 
     for k in range(n):
-        # nutrient uptake over the cell's area (reads frozen, writes live)
+        # state transition from the local (frozen) nutrient at the cell centre
+        if enable_quiescence:
+            gx = int(positions[k, 0] / dx)
+            gy = int(positions[k, 1] / dx)
+            local = nutrient_read[gy, gx] if (0 <= gy < ny and 0 <= gx < nx) else 0.0
+            if active[k] and local < quiescence_threshold:
+                active[k] = False
+            elif (not active[k]) and local > 2.0 * quiescence_threshold:
+                active[k] = True
+
+        # nutrient uptake over the cell's area (always, so the matrix shadows)
         uptake = absorb_nutrient_numba(positions[k], radii[k], nutrient_field,
                                        nutrient_read, dt, consumption_rate[k], dx)
         nutrient_acc[k] += uptake
-        # attractant secretion over the cell's area
+
+        if not active[k]:
+            continue                       # quiescent: frozen, persists
+
+        # attractant secretion + basal metabolism (active only)
         secrete_over_area_numba(positions[k], radii[k], attractant_field,
                                 secretion_rate[k] * dt, dx)
-        # basal metabolism
         nutrient_acc[k] -= basal_rate[k] * dt
 
         # growth: update radius from accumulated nutrient
