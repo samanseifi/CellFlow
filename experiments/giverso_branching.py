@@ -31,9 +31,9 @@ from matplotlib.patches import Circle
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from cellflow.simulation import CellSimulation       # noqa: E402
 
-L = 800.0
-G = 440
-STEPS = 2200
+L = 1000.0
+G = 500
+STEPS = 1800
 
 
 def config(mode):
@@ -41,16 +41,16 @@ def config(mode):
         'initial_setup_type': 'central_uniform', 'num_cells': 40,
         'initial_cluster_radius': 7.0, 'dt': 0.05,
         'physical_size': L, 'grid_resolution': G,
-        'nutrient_bc_type': 'dirichlet', 'nutrient_bc_value': 40.0,
+        'nutrient_bc_type': 'dirichlet', 'nutrient_bc_value': 50.0,
         'nutrient_D': 0.03,                 # strongly diffusion-limited front
         # weak adhesion = low surface tension, so the branching instability is
         # not smoothed away (surface tension is the stabilizing term).
-        'adhesion_strength': 0.01, 'adhesion_cutoff_factor': 1.3,
+        'adhesion_strength': 0.015, 'adhesion_cutoff_factor': 1.3,
         'repulsion_strength': 80.0, 'attractant_D': 0.0, 'chi_attractant': 0.0,
         'viscosity': 500.0, 'fluid_model': 'brinkman_fft',
         'brinkman_screening_length': 12.0, 'overlap_iterations': 4,
         'growth_model': 'area_conserving', 'enable_visualization': False,
-        'enable_quiescence': True, 'quiescence_nutrient_threshold': 32.0,
+        'enable_quiescence': True, 'quiescence_nutrient_threshold': 26.0,
         'seed': 11,
     }
     if mode == 'volumetric':
