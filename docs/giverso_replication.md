@@ -65,14 +65,44 @@ clean ℓ-scale lobed front (mode 6, ε=0.35) and track it. The seeded mode **de
    displacing a resistant medium — the continuum instability's driver has no
    direct analog here.
 
-## Open hypothesis (to revisit)
-The maintainer's view — *plausible and worth pursuing* — is that **the right
-cell-level physics should reproduce the instability**; what we proved is that the
-*current* rules give a stable front, **not** that no local rule can flip the sign.
-Candidate directions, each a genuine new model component (not a parameter tweak):
+## Open hypothesis (resolved below)
+The maintainer's view — *plausible and worth pursuing* — was that **the right
+cell-level physics should reproduce the instability**; the "stable front" above
+proved only that the *original* rules + regime give a stable front, **not** that no
+local rule can flip the sign. The update that follows confirms the hypothesis.
+
+## UPDATE — the instability IS reproducible in the right regime
+The "stable front" result above was obtained at **R/ℓ ≈ 3** — but Giverso's
+*branched* simulations live at **R\*/ℓc ≈ 31**. We were a factor ~10 short on the
+single most important group: colony radius / diffusion length. At R/ℓ≈3 the
+nutrient-fed active rim is essentially the *whole* colony, so a protrusion cannot
+focus flux and the front is stable almost by construction — a **regime artifact**,
+not proof the physics can't finger.
+
+Putting the discrete model in the paper's actual regime flips the result. Three
+ingredients were needed (`experiments/giverso_lcheck.py` finds the regime,
+`experiments/giverso_extreme.py` runs it):
+1. **Thin active rim** (R/rim ≈ 12–16): fast diffusion + matched uptake freeze a
+   starved interior so only a ~3-cell rim grows.
+2. **Quasi-steady nutrient** (diffusion outruns the front) — else the rim thickens
+   back to bulk and rounds out.
+3. **Low conversion efficiency β** (high basal metabolism) — the missing piece.
+   Growth becomes the *small difference of two large fluxes* (uptake − basal), so a
+   tip with slightly more nutrient grows disproportionately faster (Mullins–
+   Sekerka), and starved valley cells **die**, carving channels.
+
+**Result:** a seeded mode now **amplifies** (mode-10 → 1.5×, roughness → 1.8×, with
+channel-carving death) instead of decaying 370× to a round disk — the verdict flips
+to UNSTABLE. The instability is currently **transient** (a finite static colony
+self-depletes its rim and freezes after the onset); sustained dendrites need to
+defeat that freeze (sparser/larger domain, continuously advancing front). But the
+**onset mechanism the maintainer hypothesized is confirmed at the cell level:
+right physics → unstable front.** The candidate directions below remain the route
+to *sustained* branching.
+
+### Candidate directions for *sustained* branching
 - **Sparse stochastic walkers** (Ben-Jacob "communicating walkers"): cells diffuse
-  and aggregate, so noise and instability share a scale — this is *why* those
-  discrete models branch.
+  and aggregate, so noise and instability share a scale.
 - **Sharp-interface / Darcy front** (front-tracking or phase-field colony density).
 - **Strongly super-linear / avalanche front advance** (tip cells that get slightly
   more flux advance dramatically more, overcoming smoothing).
@@ -82,7 +112,8 @@ Candidate directions, each a genuine new model component (not a parameter tweak)
 ## Reproduce
 ```bash
 python experiments/giverso_nondim.py      # measure l, R/l
-python experiments/giverso_seed.py        # decisive stability test (front is stable)
-python experiments/giverso_fingering.py   # diffusion-limited colony + front spectrum
+python experiments/giverso_seed.py        # R/l~3 stability test (front stable -- regime artifact)
+python experiments/giverso_lcheck.py      # find the thin-rim regime (active fraction vs D, uptake)
+python experiments/giverso_extreme.py     # paper's regime + low-beta -> front UNSTABLE (fingering onset)
 python experiments/giverso_branching.py volumetric   # colony morphology
 ```
