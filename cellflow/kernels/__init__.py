@@ -31,6 +31,7 @@ from .mechanics import (
     strain_rate_and_axis,
 )
 from .shapes import contact_stress_celllist_numba
+from .biology import cell_biology_step_numba
 
 __all__ = [
     "diffuse_field_numba",
@@ -56,4 +57,5 @@ __all__ = [
     "sample_gradient_at_cells_numba",
     "strain_rate_and_axis",
     "contact_stress_celllist_numba",
+    "cell_biology_step_numba",
 ]
