@@ -22,6 +22,10 @@ python experiments/viscosity_sweep.py
 | `wound_closure_isolated.py` | Rigorous version: calibrates µ(δ) to hold single-cell speed fixed so only the coupling *range* varies. Closure time, front roughness, fingering wavelength. → `wound_closure_isolated.png` |
 | `wound_closure_ensemble.py` | Seed-averaged (needs #11): mean ± std of closure time and fingering over seeds, at fixed single-cell speed. Result: closure time is non-monotonic in δ (minimum at δ≈32); shortest range robustly impairs closure and maximizes fingering. → `wound_closure_ensemble.png` |
 | `convergence.py` | Precision diagnostics: grid convergence (radius-tied self-mobility now converges — #16 fixed; old grid-tied Peskin drifts), timestep order (~1, forward Euler), and advection mass conservation (interior-conserving; lost only at the clamped boundary). → `convergence.png` |
+| `cluster_growth.py` | Nutrient-fed colony growth → animated GIF + montage, with area-conserving sizes, clean post-division packing, and viscoelastic cell-shape ellipses. → `cluster_growth_simulation.gif` |
+| `mechanotransduction_demo.py` | Cell polarity aligning to an imposed simple-shear flow: directors go from disordered to the 45° strain axis; nematic order parameter vs time. → `mechanotransduction_demo.png` |
+| `ecm_poroelastic_demo.py` | Poroelastic ECM: a uniform flow reroutes around a growing low-permeability matrix patch; through-flow chokes as ECM builds. → `ecm_poroelastic.png` |
+| `ecm_colony.py` | A growing colony screens its own cell-generated flow by depositing ECM (~30% core-flow reduction); same forces solved with vs without the cell-built drag field. → `ecm_colony.png` |
 
 ## Verification (pytest)
 
@@ -35,10 +39,11 @@ These run with the normal suite (`python -m pytest`) and double as regression
 guards once a quantity is known to be correct.
 
 ## Notes / caveats
-- Runs use `walk_speed=0` for determinism where possible; the per-thread Numba
-  RNG still makes proliferation/division slightly non-reproducible (issue #11),
-  so single-seed fine structure should be confirmed by seed-averaging.
+- Set `seed` for bit-for-bit reproducible, thread-count-independent runs
+  (issue #11, fixed); ensembles vary the seed and report statistics.
+- Pairwise forces and overlap resolution use `O(N)` linked-cell neighbour lists
+  (overlap resolution is a parallel cell-list Jacobi sweep).
 - These are qualitative mechanism studies, not calibrated predictions. They
-  avoid the model's current weak spots (dense steric mechanics via the
-  geometric overlap projection, issue #15; uncalibrated adhesion surface
-  tension).
+  avoid the model's current weak spots (dense steric mechanics still use a
+  geometric overlap projection independent of viscosity, issue #15; the adhesion
+  surface tension is uncalibrated).
