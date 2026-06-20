@@ -197,10 +197,16 @@ $O(N)$; the binned forces are identical to the brute-force result to
 $\sim 10^{-10}$.
 
 \paragraph{Overlap resolution.} After the force-driven move, residual overlaps
-are removed by a sequential geometric projection (each overlapping pair is
-pushed apart by half the overlap), iterated a configurable number of times per
-step. (The degenerate exactly-coincident case is separated along a deterministic
-golden-angle direction, preserving reproducibility.)
+are removed by a geometric projection: each overlapping pair is pushed apart by
+half the overlap, iterated a configurable number of times per step. With
+neighbour lists enabled (default) this uses a parallel cell-list \emph{Jacobi}
+sweep---each cell accumulates the half-overlap push from its overlapping
+neighbours (read-only on positions) and all displacements are applied at
+once---which is $O(N)$ rather than the $O(N^2)$ sequential (Gauss--Seidel)
+sweep, and preserves the centre of mass exactly (equal-and-opposite pushes);
+an isolated pair is resolved in a single sweep. The degenerate
+exactly-coincident case is separated along a deterministic golden-angle
+direction, preserving reproducibility.
 
 \section{Hydrodynamics}\label{sec:fluid}
 

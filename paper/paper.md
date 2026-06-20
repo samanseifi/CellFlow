@@ -41,7 +41,9 @@ variable-coefficient (poroelastic) Brinkman solver for ECM-modulated drag. The
 Brinkman formulation introduces a physical screening length
 $\delta = \sqrt{\mu/\alpha}$ that regularizes the well-known 2D Stokes paradox
 and lets hydrodynamic interactions decay over a controllable range
-[@brinkman1949]. Cells and the fluid grid are coupled through an
+[@brinkman1949]; the Brinkman solver supports either periodic or free-slip
+(no-penetration, stress-free) walls. Cells and the fluid grid are coupled
+through an
 immersed-boundary scheme [@peskin2002] in which forces are spread to the grid
 and the solved velocity is interpolated back to advect both the cells and the
 scalar fields. Cell--cell sorting is driven by Steinberg differential adhesion

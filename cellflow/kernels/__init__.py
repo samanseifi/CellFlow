@@ -23,6 +23,7 @@ from .neighbors import (
     repulsion_forces_celllist_numba,
     adhesion_forces_celllist_numba,
     differential_adhesion_celllist_numba,
+    resolve_overlaps_celllist_numba,
 )
 from .mechanics import (
     velocity_gradient_numba,
@@ -50,6 +51,7 @@ __all__ = [
     "repulsion_forces_celllist_numba",
     "adhesion_forces_celllist_numba",
     "differential_adhesion_celllist_numba",
+    "resolve_overlaps_celllist_numba",
     "velocity_gradient_numba",
     "sample_gradient_at_cells_numba",
     "strain_rate_and_axis",

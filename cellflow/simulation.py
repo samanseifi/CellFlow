@@ -24,6 +24,7 @@ from .kernels.neighbors import (
     repulsion_forces_celllist_numba,
     adhesion_forces_celllist_numba,
     differential_adhesion_celllist_numba,
+    resolve_overlaps_celllist_numba,
 )
 from .kernels.stokeslet import (
     update_fluid_velocity_numba,
@@ -525,8 +526,17 @@ class CellSimulation:
     def _resolve_overlaps(self):
         cell_positions = np.array([cell.position for cell in self.cells])
         radii = np.array([cell.radius for cell in self.cells])
-        for _ in range(self.overlap_iterations):
-            resolve_overlaps_numba(cell_positions, radii)
+        if self.use_neighbor_list and len(radii) > 0:
+            # Parallel cell-list (Jacobi) sweeps: O(N) instead of O(N^2).
+            bin_size = 2.0 * radii.max()      # overlap range = touching distance
+            for _ in range(self.overlap_iterations):
+                order, bin_start, nbx = build_cell_list_numba(
+                    cell_positions, self.physical_size, bin_size)
+                resolve_overlaps_celllist_numba(
+                    cell_positions, radii, order, bin_start, nbx, bin_size)
+        else:
+            for _ in range(self.overlap_iterations):
+                resolve_overlaps_numba(cell_positions, radii)
         for i, cell in enumerate(self.cells):
             cell.position = cell_positions[i].copy()
 

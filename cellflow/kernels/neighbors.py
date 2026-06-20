@@ -175,3 +175,64 @@ def differential_adhesion_celllist_numba(positions, radii, types, adhesion_matri
                         forces[i, 0] += force_magnitude * dx_ * inv_dist
                         forces[i, 1] += force_magnitude * dy_ * inv_dist
     return forces
+
+
+@njit(parallel=True, cache=True)
+def resolve_overlaps_celllist_numba(positions, radii, order, bin_start, nbx, bin_size):
+    """Parallel (Jacobi) overlap resolution using the cell list.
+
+    Replaces the O(N^2) sequential resolve_overlaps_numba. Each cell reads the
+    CURRENT positions (read-only) and accumulates the half-overlap push from each
+    overlapping neighbour into its own displacement row; all displacements are
+    then applied at once. Because every pair contributes equal-and-opposite
+    pushes, the center of mass is preserved exactly. For an isolated pair this
+    resolves the overlap in a single sweep (identical to the sequential kernel);
+    in dense packings it converges over the configured number of sweeps.
+
+    The exactly-coincident case is separated along a deterministic golden-angle
+    direction (per cell index), preserving reproducibility.
+    """
+    n = positions.shape[0]
+    disp = np.zeros((n, 2))
+    for i in prange(n):
+        xi = positions[i, 0]
+        yi = positions[i, 1]
+        ri = radii[i]
+        bx = int(xi / bin_size)
+        by = int(yi / bin_size)
+        if bx < 0: bx = 0
+        elif bx >= nbx: bx = nbx - 1
+        if by < 0: by = 0
+        elif by >= nbx: by = nbx - 1
+        dxacc = 0.0
+        dyacc = 0.0
+        for dby in range(-1, 2):
+            ny = by + dby
+            if ny < 0 or ny >= nbx:
+                continue
+            for dbx in range(-1, 2):
+                nx = bx + dbx
+                if nx < 0 or nx >= nbx:
+                    continue
+                b = ny * nbx + nx
+                for s in range(bin_start[b], bin_start[b + 1]):
+                    j = order[s]
+                    if j == i:
+                        continue
+                    dx_ = positions[j, 0] - xi
+                    dy_ = positions[j, 1] - yi
+                    dist = np.sqrt(dx_ * dx_ + dy_ * dy_)
+                    touch = ri + radii[j]
+                    if dist < 1e-12:
+                        ang = i * 2.39996322972865332      # golden angle
+                        dxacc -= 0.5 * touch * np.cos(ang)
+                        dyacc -= 0.5 * touch * np.sin(ang)
+                    elif dist < touch:
+                        f = 0.5 * (touch - dist) / dist     # half the overlap
+                        dxacc -= f * dx_                      # push i away from j
+                        dyacc -= f * dy_
+        disp[i, 0] = dxacc
+        disp[i, 1] = dyacc
+    for i in prange(n):
+        positions[i, 0] += disp[i, 0]
+        positions[i, 1] += disp[i, 1]
