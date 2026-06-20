@@ -23,6 +23,10 @@ class Cell:
         self.secretion_rate = 1.0
         self.basal_metabolism_rate = 0.02
         self.alive = True
+        # Active (motile + proliferative) vs quiescent (passive) state. Cells go
+        # quiescent in nutrient-poor regions when quiescence is enabled; this is
+        # the active<->passive switch that lets colony fronts finger.
+        self.active = True
         self.phase = 'GROWTH'
         self.min_radius, self.max_radius = 2.0, 4.0
         self.radius = self.min_radius

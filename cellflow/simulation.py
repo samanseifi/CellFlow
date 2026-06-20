@@ -94,6 +94,16 @@ class CellSimulation:
         # area-conserving ellipse under deviatoric contact stress, by a linear
         # viscoelastic law  d(eps)/dt = (chi*stress - eps)/tau, capped at a max
         # aspect ratio. Mechanics stay circular; shape is the elastic response.
+        # Active<->passive (quiescence) transition: cells go passive where the
+        # local nutrient drops below the threshold, freezing growth/division/
+        # motility. Concentrates growth at the nutrient-exposed rim so the front
+        # can finger (bacterial-colony branching needs this state switch).
+        self.enable_quiescence = bool(config.get('enable_quiescence', False))
+        self.quiescence_threshold = float(config.get('quiescence_nutrient_threshold', 5.0))
+        if self.enable_quiescence:
+            print(f"INFO: Active/passive quiescence ON "
+                  f"(nutrient threshold = {self.quiescence_threshold:.3g}).")
+
         self.enable_cell_shape = bool(config.get('enable_cell_shape', False))
         self.shape_compliance = float(config.get('shape_compliance', 0.012))
         self.shape_relaxation_time = float(config.get('shape_relaxation_time', 0.6))
@@ -318,6 +328,13 @@ class CellSimulation:
                 propulsion_forces[i, 0] += self.polarity_propulsion_force * np.cos(cell.polarity)
                 propulsion_forces[i, 1] += self.polarity_propulsion_force * np.sin(cell.polarity)
 
+        # Quiescent (passive) cells do not self-propel (use last step's state).
+        if self.enable_quiescence:
+            for i, cell in enumerate(self.cells):
+                if not cell.active:
+                    propulsion_forces[i, 0] = 0.0
+                    propulsion_forces[i, 1] = 0.0
+
         monopolar_forces = adhesion_forces + repulsion_forces + division_forces
         return propulsion_forces, monopolar_forces
 
@@ -485,14 +502,17 @@ class CellSimulation:
         cons = np.array([c.consumption_rate for c in self.cells])
         secr = np.array([c.secretion_rate for c in self.cells])
         basal = np.array([c.basal_metabolism_rate for c in self.cells])
+        active = np.array([c.active for c in self.cells])
         c0 = self.cells[0]
         reached_div, alive = cell_biology_step_numba(
-            cell_positions, radii, nut_acc, cons, secr, basal,
+            cell_positions, radii, nut_acc, cons, secr, basal, active,
             self.nutrient_field, nutrient_to_read, self.attractant_field,
-            self.dt, self.dx, c0.area_conserving, c0.min_radius, c0.max_radius)
+            self.dt, self.dx, c0.area_conserving, c0.min_radius, c0.max_radius,
+            self.enable_quiescence, self.quiescence_threshold)
         for i, cell in enumerate(self.cells):
             cell.nutrient_accumulated = nut_acc[i]
             cell.radius = radii[i]
+            cell.active = bool(active[i])
             if reached_div[i] and cell.phase == 'GROWTH':
                 cell.phase = 'DIVISION'
             if not alive[i]:
@@ -521,7 +541,7 @@ class CellSimulation:
     def _handle_division_and_death(self):
         new_cells = []
         for cell in self.cells:
-            new_cell = cell.divide()
+            new_cell = cell.divide() if cell.active else None   # passive cells don't divide
             if new_cell:
                 new_cells.append(new_cell)
             if cell.division_force_timer > 0:
