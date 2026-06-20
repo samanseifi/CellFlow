@@ -30,7 +30,7 @@ L = 600.0
 G = 400
 TARGET_R = 150.0           # stop here -> free front (walls at 300, gap ~150)
 MAX_STEPS = 4000
-NUTRIENT_D = 0.015
+NUTRIENT_D = 0.02
 
 
 def config():
@@ -38,15 +38,16 @@ def config():
         'initial_setup_type': 'central_uniform', 'num_cells': 60,
         'initial_cluster_radius': 10.0, 'dt': 0.05,
         'physical_size': L, 'grid_resolution': G,
-        'nutrient_bc_type': 'dirichlet', 'nutrient_bc_value': 22.0,
-        'nutrient_D': NUTRIENT_D, 'chi_nutrient': 55.0,
-        'walk_speed': 0.3, 'max_propulsive_force': 30.0,
+        'nutrient_bc_type': 'dirichlet', 'nutrient_bc_value': 40.0,
+        'nutrient_D': NUTRIENT_D, 'chi_nutrient': 0.0,
+        'walk_speed': 0.05, 'max_propulsive_force': 2.0,
         'adhesion_strength': 0.0, 'adhesion_cutoff_factor': 1.2,
         'repulsion_strength': 35.0, 'attractant_D': 0.0, 'chi_attractant': 0.0,
         'viscosity': 500.0, 'fluid_model': 'brinkman_fft',
         'brinkman_screening_length': 15.0, 'overlap_iterations': 1,
         'growth_model': 'area_conserving', 'enable_visualization': False, 'seed': 4,
-        'enable_quiescence': True, 'quiescence_nutrient_threshold': 9.0,
+        'enable_quiescence': True, 'quiescence_nutrient_threshold': 28.0,
+        'directed_division': True,
     }
 
 

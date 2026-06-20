@@ -100,6 +100,13 @@ class CellSimulation:
         # can finger (bacterial-colony branching needs this state switch).
         self.enable_quiescence = bool(config.get('enable_quiescence', False))
         self.quiescence_threshold = float(config.get('quiescence_nutrient_threshold', 5.0))
+
+        # Gradient-directed division: daughters are placed up the local nutrient
+        # gradient, so growth advances the front toward fresh nutrient (the
+        # agent-level Mullins-Sekerka rule) rather than thickening it isotropically.
+        self.directed_division = bool(config.get('directed_division', False))
+        if self.directed_division:
+            print("INFO: Gradient-directed division ON (daughters placed up-gradient).")
         if self.enable_quiescence:
             print(f"INFO: Active/passive quiescence ON "
                   f"(nutrient threshold = {self.quiescence_threshold:.3g}).")
@@ -539,11 +546,26 @@ class CellSimulation:
         self._enforce_boundaries()
 
     def _handle_division_and_death(self):
+        # Gradient-directed division: precompute the nutrient gradient so each
+        # dividing cell can place its daughter up-gradient (toward fresh
+        # nutrient), advancing the front instead of thickening it. This is the
+        # agent-level "front advances along the flux" rule.
+        grad_y = grad_x = None
+        if self.directed_division:
+            grad_y, grad_x = np.gradient(self.nutrient_field, self.dx)
+        G = self.grid_resolution
         new_cells = []
         for cell in self.cells:
-            new_cell = cell.divide() if cell.active else None   # passive cells don't divide
-            if new_cell:
-                new_cells.append(new_cell)
+            if cell.active:                              # passive cells don't divide
+                direction = None
+                if self.directed_division:
+                    i = int(cell.position[0] / self.dx)
+                    j = int(cell.position[1] / self.dx)
+                    if 0 <= j < G and 0 <= i < G:
+                        direction = (grad_x[j, i], grad_y[j, i])   # up-gradient (x, y)
+                new_cell = cell.divide(direction)
+                if new_cell:
+                    new_cells.append(new_cell)
             if cell.division_force_timer > 0:
                 cell.division_force_timer -= 1
                 if cell.division_force_timer == 0:

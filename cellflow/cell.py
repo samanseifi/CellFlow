@@ -86,7 +86,7 @@ class Cell:
         if self.nutrient_accumulated < 0:
             self.alive = False
 
-    def divide(self):
+    def divide(self, direction=None):
         if self.phase == 'DIVISION':
             self.nutrient_accumulated /= 2
             self.phase = 'GROWTH'
@@ -94,15 +94,25 @@ class Cell:
             self.just_divided_timer = 5
 
             # Place the daughter just *touching* the parent (separation = sum of
-            # radii) along a random direction, rather than a zero-mean Gaussian
-            # offset that would bury it inside the parent (issue #21).
-            d = np.random.randn(2)
-            norm = np.sqrt(d[0] ** 2 + d[1] ** 2)
-            direction = d / norm if norm > 1e-9 else np.array([1.0, 0.0])
+            # radii). If a `direction` is given (the local nutrient gradient, for
+            # gradient-directed division), place the daughter UP-GRADIENT so
+            # growth advances the front toward fresh nutrient rather than
+            # thickening it isotropically. Otherwise use a random direction
+            # (issue #21: never a zero-mean offset that buries the daughter).
+            u = None
+            if direction is not None:
+                d = np.asarray(direction, dtype=np.float64)
+                n = np.sqrt(d[0] ** 2 + d[1] ** 2)
+                if n > 1e-9:
+                    u = d / n
+            if u is None:
+                d = np.random.randn(2)
+                n = np.sqrt(d[0] ** 2 + d[1] ** 2)
+                u = d / n if n > 1e-9 else np.array([1.0, 0.0])
             daughter = Cell(self.position.copy(), self.nutrient_accumulated,
                             just_divided_timer=5, cell_type=self.cell_type,
                             area_conserving=self.area_conserving)
-            daughter.position = self.position + direction * (self.radius + daughter.radius)
+            daughter.position = self.position + u * (self.radius + daughter.radius)
             daughter.polarity = self.polarity     # inherit orientation
 
             self.division_partner_id = daughter.id
