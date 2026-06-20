@@ -19,6 +19,7 @@ from .kernels.mechanics import (
     strain_rate_and_axis,
 )
 from .kernels.shapes import contact_stress_celllist_numba
+from .kernels.biology import cell_biology_step_numba
 from .kernels.neighbors import (
     build_cell_list_numba,
     repulsion_forces_celllist_numba,
@@ -477,18 +478,25 @@ class CellSimulation:
             self.attractant_field, self.attractant_D, self.dt, self.dx
         )
 
-        # 7. Cell biology (consumption, growth)
+        # 7. Cell biology (uptake, secretion, metabolism, growth, phase, death),
+        #    batched into a single compiled kernel (replaces the per-cell loop).
         nutrient_to_read = np.copy(self.nutrient_field)
+        nut_acc = np.array([c.nutrient_accumulated for c in self.cells])
+        cons = np.array([c.consumption_rate for c in self.cells])
+        secr = np.array([c.secretion_rate for c in self.cells])
+        basal = np.array([c.basal_metabolism_rate for c in self.cells])
+        c0 = self.cells[0]
+        reached_div, alive = cell_biology_step_numba(
+            cell_positions, radii, nut_acc, cons, secr, basal,
+            self.nutrient_field, nutrient_to_read, self.attractant_field,
+            self.dt, self.dx, c0.area_conserving, c0.min_radius, c0.max_radius)
         for i, cell in enumerate(self.cells):
-            uptake = cell.absorb_nutrient(
-                self.nutrient_field, nutrient_to_read, self.dt, self.dx
-            )
-            cell.nutrient_accumulated += uptake
-            cell.secrete_attractant(self.attractant_field, self.dt, self.dx)
-            cell.nutrient_accumulated -= cell.basal_metabolism_rate * self.dt
-            cell.update_radius()
-            cell.update_phase()
-            cell.check_death()
+            cell.nutrient_accumulated = nut_acc[i]
+            cell.radius = radii[i]
+            if reached_div[i] and cell.phase == 'GROWTH':
+                cell.phase = 'DIVISION'
+            if not alive[i]:
+                cell.alive = False
 
         # 8. Compute cell velocities via mobility relation:
         #    v_k = F_k/(6*pi*mu*R_k) + sum_{j!=k} G(x_k,x_j).F_j
@@ -541,8 +549,14 @@ class CellSimulation:
             cell.position = cell_positions[i].copy()
 
     def _enforce_boundaries(self):
-        for cell in self.cells:
-            cell.position = np.clip(cell.position, cell.radius, self.physical_size - cell.radius)
+        if not self.cells:
+            return
+        pos = np.array([c.position for c in self.cells])
+        radii = np.array([c.radius for c in self.cells])
+        np.clip(pos[:, 0], radii, self.physical_size - radii, out=pos[:, 0])
+        np.clip(pos[:, 1], radii, self.physical_size - radii, out=pos[:, 1])
+        for i, cell in enumerate(self.cells):
+            cell.position = pos[i].copy()
 
     def run_simulation(self, steps, save_interval):
         print(f"Starting simulation '{self.config_name}' for {steps} steps.")
