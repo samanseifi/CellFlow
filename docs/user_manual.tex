@@ -140,6 +140,8 @@ Key & Default & Meaning \\ \midrule \endhead
 \code{physical\_size} & \emph{required} & domain side length $L$ \\
 \code{grid\_resolution} & \emph{required} & grid points per axis $G$ \\
 \code{dt} & \emph{required} & time step $\Delta t$ \\
+\code{diffusion\_substeps} & \code{1} & diffuse the fields $M$ times per step with $\Delta t/M$ (keeps explicit diffusion stable at large $\Delta t$) \\
+\code{fluid\_update\_interval} & \code{1} & recompute the (expensive) Brinkman solve every $K$ steps; velocities re-interpolated from the cached field between (\code{brinkman\_fft}; auto-recomputed with ECM) \\
 \code{seed} & \code{None} & RNG seed (set for reproducibility) \\
 \code{enable\_visualization} & \code{False} & render frames and a GIF \\
 \code{num\_cells} & \emph{required*} & cluster cell count (central\_uniform) \\

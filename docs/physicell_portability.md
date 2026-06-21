@@ -36,11 +36,23 @@ PhysiCell entirely lacks.
   This is the "Monod dynamics" the Giverso paper flagged as the realistic next
   step; it changes gradient shapes and necrotic-core/critical-size predictions.
 
-### 3. Multi-timescale operator splitting  ⬜ TODO
-- Sub-cycle the cheap diffusion within a mechanics/fluid step and update biology
-  (growth/division/quiescence) on a coarse cadence, à la PhysiCell's
-  `dt_diffusion ≪ dt_mechanics ≪ dt_phenotype`. Large speedup at fixed accuracy;
-  pairs naturally with #1. Moderate effort, no physics risk.
+### 3. Multi-timescale operator splitting  ✅ DONE
+- **PhysiCell idea:** `dt_diffusion ≪ dt_mechanics ≪ dt_phenotype` — run the fast
+  process often, the slow/expensive one rarely.
+- **Adapted to CellFlow's cost structure** (diffusion is cheap, the FFT Brinkman
+  solve is the bottleneck) and shipped as two config knobs, both default 1:
+  - `diffusion_substeps` M — diffuse the chemical fields M times per step with
+    `dt/M`, so the field relaxes toward quasi-steady and the explicit FTCS scheme
+    stays stable at a large mechanics `dt` (an alternative to the implicit solver
+    when you want to stay explicit).
+  - `fluid_update_interval` K — recompute the expensive Brinkman solve only every
+    K steps; cell velocities are re-interpolated from the cached field every step
+    (bounded staleness; forced to recompute when ECM is on). ~20% faster on a
+    fluid-light colony, more when the solve dominates (large grid / few cells /
+    the variable-α or free-slip solvers).
+- **Possible extension:** a true *phenotype* cadence (growth/division/death every
+  K steps) would need splitting uptake from growth in the biology kernel to keep
+  the nutrient bookkeeping consistent; deferred.
 
 ## Tier 2 — real breadth, port when the science needs it
 

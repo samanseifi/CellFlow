@@ -447,11 +447,19 @@ tumour stroma, interstitial flow, and durotaxis).
   \item \textbf{Fluid:} spectral (FFT) for Brinkman, $O(M\log M)$; Picard
         iteration for variable drag.
   \item \textbf{Pairwise forces:} linked-cell neighbour lists, $O(N)$.
+  \item \textbf{Multi-timescale splitting:} optional decoupling of fast transport
+        from the slow/expensive steps. \texttt{diffusion\_substeps} $M$ applies the
+        diffusion solver $M$ times per step with $\dt/M$ (keeps the explicit scheme
+        stable when $D\dt/\dx^2>\tfrac14$ overall, and relaxes the field toward
+        quasi-steady). \texttt{fluid\_update\_interval} $K$ recomputes the
+        expensive Brinkman solve only every $K$ steps, re-interpolating cell
+        velocities from the cached field each step (bounded staleness; always
+        recomputed when the ECM drag field is active).
 \end{itemize}
 
 \section{Verification and validation}\label{sec:vv}
 
-CellFlow ships an automated test suite (115 tests) including:
+CellFlow ships an automated test suite (120 tests) including:
 \begin{itemize}
   \item \textbf{Solver verification:} a Method of Manufactured Solutions test
         recovers a multi-mode divergence-free field to machine precision for
@@ -464,6 +472,9 @@ CellFlow ships an automated test suite (115 tests) including:
         unconditionally stable at $\dt$ far beyond the explicit CFL limit, exact
         on the uniform steady state, mass-conserving under Neumann, and in
         agreement with the explicit scheme over a transient at small $\dt$.
+        Multi-timescale: sub-stepping keeps explicit diffusion bounded at $4\times$
+        the CFL limit; the coarse fluid cadence reproduces the every-step run on
+        step~0 and remains stable with the cached field.
   \item \textbf{Physics checks:} screening monotonicity; mechanotransduction
         alignment to the correct strain axis; cell-shape response to uniaxial vs
         isotropic stress; area-conserving division; Michaelis--Menten uptake
