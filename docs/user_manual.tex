@@ -210,6 +210,10 @@ Key & Default & Meaning \\ \midrule \endhead
 \toprule
 Key & Default & Meaning \\ \midrule \endhead
 \code{growth\_model} & \code{'linear'} & \code{'linear'} (legacy) or \code{'area\_conserving'} (recommended) \\
+\code{enable\_quiescence} & \code{False} & nutrient-driven active$\leftrightarrow$passive switch (quiescent cells freeze) \\
+\code{quiescence\_nutrient\_threshold} & \code{5.0} & local nutrient below which a cell goes quiescent \\
+\code{enable\_pressure\_inhibition} & \code{False} & contact inhibition: cells stop dividing under high compressive stress (homeostatic pressure) \\
+\code{pressure\_threshold} & \code{1.0} & contact pressure above which proliferation is arrested \\
 \bottomrule
 \end{longtable}
 

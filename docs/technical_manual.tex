@@ -136,6 +136,23 @@ overlapping). The daughter inherits cell type, polarity, and growth mode; its
 deviatoric shape strain starts at zero (a newborn is round). For a brief window
 after division the mother--daughter pair feel a mutual separating force.
 
+\subsection{Mechanical feedback on growth}\label{sec:pressure}
+By default a cell's biology is mechanically blind: it exerts and feels contact
+forces but proliferates regardless of how crowded it is. Optionally
+(\texttt{enable\_pressure\_inhibition}) cells respond to compressive stress via
+\emph{contact inhibition of proliferation} / a homeostatic pressure. Each cell is
+assigned a scalar (virial) contact pressure from its repulsive overlaps,
+\begin{equation}
+  P_i = \frac{1}{2 A_i}\sum_{j}\,\vf_{ij}\cdot\vr_{ij}, \qquad A_i = \pi R_i^2,
+\end{equation}
+where the sum runs over overlapping neighbours and $\vf_{ij}\cdot\vr_{ij}\ge 0$
+under repulsion (compression). Unlike the net force, $P_i$ does not cancel under
+isotropic squeezing, so it measures mechanical crowding. When $P_i$ exceeds
+\texttt{pressure\_threshold} the cell grows to full size but does not divide
+(its stored nutrient is capped at the division threshold). The compressed colony
+core therefore arrests while the uncrowded rim keeps proliferating, and the
+population settles to a homeostatic density rather than overgrowing.
+
 \section{Chemical fields}\label{sec:fields}
 
 Each scalar field $c \in \{N, A\}$ obeys advection--diffusion with cellular
@@ -446,7 +463,9 @@ tumour stroma, interstitial flow, and durotaxis).
         $\max\lvert\vu\rvert\,\dt/\dx > 1$.
   \item \textbf{Fluid:} spectral (FFT) for Brinkman, $O(M\log M)$; Picard
         iteration for variable drag.
-  \item \textbf{Pairwise forces:} linked-cell neighbour lists, $O(N)$.
+  \item \textbf{Pairwise forces:} linked-cell neighbour lists, $O(N)$; an optional
+        per-cell virial contact pressure (same linked-cell structure) drives
+        mechanical feedback on proliferation.
   \item \textbf{Multi-timescale splitting:} optional decoupling of fast transport
         from the slow/expensive steps. \texttt{diffusion\_substeps} $M$ applies the
         diffusion solver $M$ times per step with $\dt/M$ (keeps the explicit scheme
@@ -459,7 +478,7 @@ tumour stroma, interstitial flow, and durotaxis).
 
 \section{Verification and validation}\label{sec:vv}
 
-CellFlow ships an automated test suite (128 tests) including:
+CellFlow ships an automated test suite (134 tests) including:
 \begin{itemize}
   \item \textbf{Solver verification:} a Method of Manufactured Solutions test
         recovers a multi-mode divergence-free field to machine precision for
