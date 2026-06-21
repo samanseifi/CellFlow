@@ -80,6 +80,24 @@ class CellSimulation:
         # saturating uptake. <= 0 -> first-order (linear) uptake (default).
         self.nutrient_uptake_saturation = float(config.get('nutrient_uptake_saturation', -1.0))
 
+        # Multi-timescale operator splitting (PhysiCell-style decoupling of fast
+        # transport from slow/expensive steps). Both default to 1 (no change).
+        #  - diffusion_substeps M: diffuse the chemical fields M times per step
+        #    with dt/M, so the cheap field relaxes toward quasi-steady and the
+        #    explicit FTCS scheme stays stable at a large mechanics dt.
+        #  - fluid_update_interval K: recompute the EXPENSIVE Brinkman FFT solve
+        #    only every K steps (cell velocities are re-interpolated from the
+        #    cached field every step). Bounded staleness error; ignored for the
+        #    legacy Stokeslet path and forced to 1 when ECM is on (drag changes).
+        self.diffusion_substeps = max(1, int(config.get('diffusion_substeps', 1)))
+        self.fluid_update_interval = max(1, int(config.get('fluid_update_interval', 1)))
+        self._step_count = 0
+        if self.diffusion_substeps > 1:
+            print(f"INFO: Diffusion sub-stepping ON ({self.diffusion_substeps} substeps/step).")
+        if self.fluid_update_interval > 1:
+            print(f"INFO: Fluid solve every {self.fluid_update_interval} steps "
+                  f"(cached between).")
+
         # Nutrient boundary condition: 'dirichlet' holds edges at nutrient_bc_value
         # (external reservoir, use for branching/pattern studies).
         # 'neumann' (default) uses no-flux boundaries (isolated system).
@@ -426,6 +444,12 @@ class CellSimulation:
         if not self.cells:
             return
 
+        # Multi-timescale: recompute the expensive Brinkman solve only every
+        # fluid_update_interval steps (always on step 0 and whenever ECM is on).
+        recompute_fluid = (self._step_count % self.fluid_update_interval == 0
+                           or self.enable_ecm)
+        self._step_count += 1
+
         # 1. Build cell arrays
         cell_positions = np.array([cell.position for cell in self.cells])
         radii = np.array([cell.radius for cell in self.cells])
@@ -443,31 +467,32 @@ class CellSimulation:
         precomputed_cell_velocities = None
         if self.fluid_model == 'brinkman_fft':
             sigmas = self.ibm_reg_factor * radii   # physical regularization width
-            force_density = spread_forces_blob_numba(
-                cell_positions, total_forces, sigmas,
-                self.grid_resolution, self.grid_resolution, self.dx
-            )
-            if self.enable_ecm:
-                if self.fluid_boundary != 'periodic':
-                    raise NotImplementedError(
-                        "fluid_boundary='freeslip_box' is not yet supported "
-                        "together with the variable-drag ECM solver; use "
-                        "periodic boundaries with ECM.")
-                alpha_field = self._update_ecm()        # cell-remodeled drag field
-                self.fluid_velocity, self._ecm_iters, self._ecm_residual = \
-                    solve_velocity_variable_alpha(
+            if recompute_fluid:                    # multi-timescale: skip the
+                force_density = spread_forces_blob_numba(   # expensive solve between
+                    cell_positions, total_forces, sigmas,   # updates (cached field)
+                    self.grid_resolution, self.grid_resolution, self.dx
+                )
+                if self.enable_ecm:
+                    if self.fluid_boundary != 'periodic':
+                        raise NotImplementedError(
+                            "fluid_boundary='freeslip_box' is not yet supported "
+                            "together with the variable-drag ECM solver; use "
+                            "periodic boundaries with ECM.")
+                    alpha_field = self._update_ecm()        # cell-remodeled drag field
+                    self.fluid_velocity, self._ecm_iters, self._ecm_residual = \
+                        solve_velocity_variable_alpha(
+                            force_density, mu=self.viscosity, dx=self.dx,
+                            alpha_field=alpha_field)
+                elif self.fluid_boundary == 'freeslip_box':
+                    self.fluid_velocity = solve_velocity_freeslip_box(
                         force_density, mu=self.viscosity, dx=self.dx,
-                        alpha_field=alpha_field)
-            elif self.fluid_boundary == 'freeslip_box':
-                self.fluid_velocity = solve_velocity_freeslip_box(
-                    force_density, mu=self.viscosity, dx=self.dx,
-                    alpha=self.brinkman_alpha,
-                )
-            else:
-                self.fluid_velocity = solve_velocity(
-                    force_density, mu=self.viscosity, dx=self.dx,
-                    alpha=self.brinkman_alpha,
-                )
+                        alpha=self.brinkman_alpha,
+                    )
+                else:
+                    self.fluid_velocity = solve_velocity(
+                        force_density, mu=self.viscosity, dx=self.dx,
+                        alpha=self.brinkman_alpha,
+                    )
             precomputed_cell_velocities = interpolate_velocity_blob_numba(
                 self.fluid_velocity, cell_positions, sigmas, self.dx
             )
@@ -516,14 +541,17 @@ class CellSimulation:
             self.attractant_field, self.fluid_velocity, self.dt, self.dx
         )
 
-        # 6. Diffuse scalar fields (solver selected by config: explicit/implicit)
-        self.nutrient_field = self._diffuse(
-            self.nutrient_field, self.nutrient_D, self.dt, self.dx,
-            self.nutrient_bc_value
-        )
-        self.attractant_field = self._diffuse(
-            self.attractant_field, self.attractant_D, self.dt, self.dx
-        )
+        # 6. Diffuse scalar fields (solver selected by config: explicit/implicit;
+        #    optionally sub-stepped M times with dt/M for stability/accuracy)
+        dt_sub = self.dt / self.diffusion_substeps
+        for _ in range(self.diffusion_substeps):
+            self.nutrient_field = self._diffuse(
+                self.nutrient_field, self.nutrient_D, dt_sub, self.dx,
+                self.nutrient_bc_value
+            )
+            self.attractant_field = self._diffuse(
+                self.attractant_field, self.attractant_D, dt_sub, self.dx
+            )
 
         # 7. Cell biology (uptake, secretion, metabolism, growth, phase, death),
         #    batched into a single compiled kernel (replaces the per-cell loop).
