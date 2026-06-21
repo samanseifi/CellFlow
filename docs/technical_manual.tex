@@ -90,6 +90,20 @@ $b\,\dt$ with $b=0.02$, and optionally secretes attractant at rate $s=1.0$:
 \end{equation}
 A cell dies (is removed) when $n_i < 0$.
 
+\paragraph{Uptake kinetics.} The local uptake rate as a function of the ambient
+concentration $c$ is selectable. By default it is \emph{first-order} (linear),
+$q(c)=k_i\,c$. Setting a half-saturation constant $K_m$ (per cell, or globally
+via \texttt{nutrient\_uptake\_saturation}) switches to \emph{Michaelis--Menten /
+Monod} saturating kinetics,
+\begin{equation}
+  q(c) = k_i\,c\,\frac{K_m}{K_m + c},
+\end{equation}
+so that $k_i$ is the low-concentration rate constant ($q\to k_i c$ as
+$c\ll K_m$) and the uptake saturates at $k_i K_m$ for $c\gg K_m$ (a cell cannot
+consume arbitrarily fast). The linear law is recovered exactly as
+$K_m\to\infty$. Saturating uptake reshapes the nutrient profile and is the
+realistic regime for diffusion-limited aggregates and colony fronts.
+
 \subsection{Size models}
 CellFlow provides two growth laws, selected by \texttt{growth\_model}.
 
@@ -135,15 +149,40 @@ cellular uptake/secretion. Boundary conditions for the nutrient field are
 selectable: \emph{Neumann} (no-flux, isolated system) or \emph{Dirichlet}
 (edges held at a constant reservoir value, modelling an external medium).
 
-\paragraph{Diffusion.} An explicit five-point (FTCS) scheme is used,
+\paragraph{Diffusion.} Two solvers are available, selected by
+\texttt{diffusion\_solver}. The default \emph{explicit} five-point (FTCS) scheme,
 \begin{equation}
   c^{m+1}_{ij} = c^{m}_{ij}
   + \frac{D_c \dt}{\dx^2}\left(c_{i-1,j}+c_{i+1,j}+c_{i,j-1}+c_{i,j+1}-4c_{ij}\right),
 \end{equation}
-clamped to be non-negative. It is stable when the diffusion number
-$D_c\dt/\dx^2 \le 1/4$; the code warns when this is violated. Under no-flux
-boundaries the discrete scheme is conservative in the interior (verified) but
-the node-centred ghost treatment is not strictly flux-conservative at the walls.
+clamped to be non-negative, is stable only when the diffusion number
+$D_c\dt/\dx^2 \le 1/4$ (the code warns otherwise).
+
+The \emph{implicit} solver (\texttt{diffusion\_solver='implicit'}) is an
+alternating-direction implicit (ADI, Peaceman--Rachford) scheme: each step is two
+half-steps, the first implicit in $x$ and explicit in $y$, the second the reverse,
+\begin{align}
+  \big(\mathcal{I} - \tfrac{r}{2}\,\delta_x^2\big)c^{*}
+   &= \big(\mathcal{I} + \tfrac{r}{2}\,\delta_y^2\big)c^{m}, \\
+  \big(\mathcal{I} - \tfrac{r}{2}\,\delta_y^2\big)c^{m+1}
+   &= \big(\mathcal{I} + \tfrac{r}{2}\,\delta_x^2\big)c^{*},
+\end{align}
+with $r = D_c\dt/\dx^2$ and $\delta^2$ the second-difference operator. Each
+half-step is a set of independent tridiagonal systems solved by the Thomas
+algorithm ($O(M)$), parallelized over lines. ADI is \emph{unconditionally stable}
+(any $\dt$), second order in space and time, and preserves the discrete steady
+state exactly (a uniform field at the Dirichlet value is a fixed point), so it
+reaches the quasi-steady profile in far fewer steps than the explicit scheme and
+without a CFL limit on $D$. Because CellFlow advects fields by the flow, the
+overall scheme is IMEX (implicit diffusion combined with the semi-Lagrangian
+advection below), which keeps the cell--fluid coupling intact. ADI is
+$L^2$-stable rather than strictly maximum-principle-preserving, so very large
+steps can produce small ($\sim$few-percent) over/undershoots, and with a fixed
+step it converges to the exact steady state gradually (no parameter cycling).
+
+Under no-flux (Neumann) boundaries the explicit scheme is conservative in the
+interior (verified) but the node-centred ghost treatment is not strictly
+flux-conservative at the walls.
 
 \paragraph{Advection.} A semi-Lagrangian scheme back-traces each grid point
 along $-\vu\,\dt$ and interpolates bilinearly. It is unconditionally stable but
@@ -398,7 +437,11 @@ tumour stroma, interstitial flow, and durotaxis).
 \begin{itemize}
   \item \textbf{Time integration:} forward Euler for cell positions and the
         ODE-like polarity/shape relaxations (first order in $\dt$).
-  \item \textbf{Diffusion:} explicit FTCS; stable for $D\dt/\dx^2 \le 1/4$.
+  \item \textbf{Diffusion:} selectable --- explicit FTCS (stable for
+        $D\dt/\dx^2 \le 1/4$) or implicit ADI (Peaceman--Rachford, Thomas solves,
+        unconditionally stable, second order, IMEX with the flow advection).
+  \item \textbf{Uptake:} first-order (linear) or Michaelis--Menten/Monod
+        saturating kinetics.
   \item \textbf{Advection:} semi-Lagrangian; the code warns when the CFL number
         $\max\lvert\vu\rvert\,\dt/\dx > 1$.
   \item \textbf{Fluid:} spectral (FFT) for Brinkman, $O(M\log M)$; Picard
@@ -408,7 +451,7 @@ tumour stroma, interstitial flow, and durotaxis).
 
 \section{Verification and validation}\label{sec:vv}
 
-CellFlow ships an automated test suite (87 tests) including:
+CellFlow ships an automated test suite (115 tests) including:
 \begin{itemize}
   \item \textbf{Solver verification:} a Method of Manufactured Solutions test
         recovers a multi-mode divergence-free field to machine precision for
@@ -417,9 +460,15 @@ CellFlow ships an automated test suite (87 tests) including:
         self-mobility and hydrodynamic interactions converge; the timestep error
         scales as $\dt^1$ (forward Euler); the advection scheme conserves mass
         in the interior.
+  \item \textbf{Transport solvers:} the implicit ADI diffusion is verified
+        unconditionally stable at $\dt$ far beyond the explicit CFL limit, exact
+        on the uniform steady state, mass-conserving under Neumann, and in
+        agreement with the explicit scheme over a transient at small $\dt$.
   \item \textbf{Physics checks:} screening monotonicity; mechanotransduction
         alignment to the correct strain axis; cell-shape response to uniaxial vs
-        isotropic stress; area-conserving division.
+        isotropic stress; area-conserving division; Michaelis--Menten uptake
+        (reduces uptake at high concentration, recovers the linear law as
+        $K_m\to\infty$, saturates, stays non-negative).
   \item \textbf{Reproducibility:} with a seed, runs are bit-for-bit identical
         and independent of the thread count.
 \end{itemize}

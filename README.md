@@ -25,7 +25,9 @@ fluid permeability by depositing extracellular matrix.
 - **Immersed-boundary coupling** between cells and the fluid grid, with
   grid-convergent mobility.
 - **Chemical transport** by operator splitting (semi-Lagrangian advection +
-  explicit diffusion + cell uptake/secretion).
+  diffusion + cell uptake/secretion), with a selectable diffusion solver
+  (**explicit** FTCS or **implicit** ADI, unconditionally stable) and
+  first-order or **Michaelis–Menten/Monod saturating** uptake.
 - **Cell–cell mechanics**: exponential repulsion, adhesion, and Steinberg
   differential adhesion driving sorting/engulfment, with `O(N)` linked-cell
   neighbour lists and parallel cell-list overlap resolution.
