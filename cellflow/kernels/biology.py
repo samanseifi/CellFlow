@@ -22,7 +22,8 @@ def cell_biology_step_numba(positions, radii, nutrient_acc, consumption_rate,
                             nutrient_field, nutrient_read, attractant_field,
                             dt, dx, area_conserving, min_radius, max_radius,
                             enable_quiescence, quiescence_threshold,
-                            uptake_saturation):
+                            uptake_saturation,
+                            pressure, enable_pressure_inhibition, pressure_threshold):
     """Advance one biology step for all cells, in place.
 
     Updates ``nutrient_acc``, ``radii`` and the ``active`` flags in place,
@@ -72,6 +73,14 @@ def cell_biology_step_numba(positions, radii, nutrient_acc, consumption_rate,
                                 secretion_rate[k] * dt, dx)
         nutrient_acc[k] -= basal_rate[k] * dt
 
+        # Mechanical feedback: a cell under high compressive contact pressure is
+        # contact-inhibited -- it grows to full size but does not proliferate
+        # (homeostatic pressure). Cap stored nutrient so it cannot store growth
+        # beyond confluence; division eligibility is suppressed below.
+        inhibited = enable_pressure_inhibition and pressure[k] > pressure_threshold
+        if inhibited and nutrient_acc[k] > 100.0:
+            nutrient_acc[k] = 100.0
+
         # growth: update radius from accumulated nutrient
         if area_conserving:
             frac = nutrient_acc[k] / 100.0
@@ -90,7 +99,7 @@ def cell_biology_step_numba(positions, radii, nutrient_acc, consumption_rate,
                 r = max_radius
             radii[k] = r
 
-        if radii[k] >= max_radius:
+        if radii[k] >= max_radius and not inhibited:
             reached_division[k] = True
         if nutrient_acc[k] < 0.0:
             alive[k] = False

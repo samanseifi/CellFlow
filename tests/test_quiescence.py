@@ -16,11 +16,12 @@ def _step(cells, nutrient, threshold, enable=True, dt=0.1, dx=1.0):
     basal = np.array([c.basal_metabolism_rate for c in cells])
     active = np.array([c.active for c in cells])
     sat = np.array([c.uptake_saturation for c in cells])
+    press = np.zeros(len(cells))
     c0 = cells[0]
     div, alive = cell_biology_step_numba(
         pos, radii, nut, cons, secr, basal, active, nutrient, nutrient_read,
         attractant, dt, dx, c0.area_conserving, c0.min_radius, c0.max_radius,
-        enable, threshold, sat)
+        enable, threshold, sat, press, False, 1.0)
     for i, c in enumerate(cells):
         c.nutrient_accumulated = nut[i]
         c.radius = radii[i]

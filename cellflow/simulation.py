@@ -24,6 +24,7 @@ from .kernels.biology import cell_biology_step_numba
 from .kernels.neighbors import (
     build_cell_list_numba,
     repulsion_forces_celllist_numba,
+    contact_pressure_celllist_numba,
     adhesion_forces_celllist_numba,
     differential_adhesion_celllist_numba,
     resolve_overlaps_celllist_numba,
@@ -134,6 +135,15 @@ class CellSimulation:
         # can finger (bacterial-colony branching needs this state switch).
         self.enable_quiescence = bool(config.get('enable_quiescence', False))
         self.quiescence_threshold = float(config.get('quiescence_nutrient_threshold', 5.0))
+
+        # Mechanical feedback on proliferation (contact inhibition / homeostatic
+        # pressure): cells whose compressive contact pressure exceeds the
+        # threshold grow to full size but stop dividing. Off by default.
+        self.enable_pressure_inhibition = bool(config.get('enable_pressure_inhibition', False))
+        self.pressure_threshold = float(config.get('pressure_threshold', 1.0))
+        if self.enable_pressure_inhibition:
+            print(f"INFO: Pressure-inhibited growth ON "
+                  f"(contact-pressure threshold = {self.pressure_threshold:.3g}).")
 
         # Gradient-directed division: daughters are placed up the local nutrient
         # gradient, so growth advances the front toward fresh nutrient (the
@@ -562,12 +572,25 @@ class CellSimulation:
         basal = np.array([c.basal_metabolism_rate for c in self.cells])
         active = np.array([c.active for c in self.cells])
         sat = np.array([c.uptake_saturation for c in self.cells])
+        # Compressive contact pressure for mechanical feedback (only when needed)
+        if self.enable_pressure_inhibition and len(radii) > 0:
+            p_bin = 2.0 * radii.max() * max(self.adhesion_cutoff_factor, 1.0)
+            p_order, p_start, p_nbx = build_cell_list_numba(
+                cell_positions, self.physical_size, p_bin)
+            pressure = contact_pressure_celllist_numba(
+                cell_positions, radii, self.repulsion_strength,
+                p_order, p_start, p_nbx, p_bin)
+            for i, cell in enumerate(self.cells):
+                cell.pressure = pressure[i]
+        else:
+            pressure = np.zeros(len(self.cells))
         c0 = self.cells[0]
         reached_div, alive = cell_biology_step_numba(
             cell_positions, radii, nut_acc, cons, secr, basal, active,
             self.nutrient_field, nutrient_to_read, self.attractant_field,
             self.dt, self.dx, c0.area_conserving, c0.min_radius, c0.max_radius,
-            self.enable_quiescence, self.quiescence_threshold, sat)
+            self.enable_quiescence, self.quiescence_threshold, sat,
+            pressure, self.enable_pressure_inhibition, self.pressure_threshold)
         for i, cell in enumerate(self.cells):
             cell.nutrient_accumulated = nut_acc[i]
             cell.radius = radii[i]

@@ -31,6 +31,9 @@ class Cell:
         # quiescent in nutrient-poor regions when quiescence is enabled; this is
         # the active<->passive switch that lets colony fronts finger.
         self.active = True
+        # Compressive contact pressure (virial) from neighbours, updated each
+        # step when pressure inhibition is enabled; gates proliferation.
+        self.pressure = 0.0
         self.phase = 'GROWTH'
         self.min_radius, self.max_radius = 2.0, 4.0
         self.radius = self.min_radius
