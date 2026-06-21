@@ -5,7 +5,8 @@ import os
 import numpy as np
 
 from .initializers import INITIALIZER_MAP
-from .kernels.diffusion import diffuse_field_numba, advect_scalar_field_numba
+from .kernels.diffusion import (diffuse_field_numba, diffuse_field_implicit_numba,
+                                advect_scalar_field_numba)
 from .kernels.forces import (
     calculate_adhesion_forces_numba,
     calculate_repulsion_forces_numba,
@@ -63,6 +64,21 @@ class CellSimulation:
         self.dt = config['dt']
         self.nutrient_D = config['nutrient_D']
         self.chi_nutrient = config['chi_nutrient']
+
+        # Diffusion solver: 'explicit' (forward-Euler, CFL-limited dt<dx^2/4D) or
+        # 'implicit' (ADI/Peaceman-Rachford, unconditionally stable, exact steady
+        # state -- use for stiff/high-D or quasi-steady studies). Both available.
+        self.diffusion_solver = config.get('diffusion_solver', 'explicit')
+        if self.diffusion_solver not in ('explicit', 'implicit'):
+            raise ValueError("diffusion_solver must be 'explicit' or 'implicit'.")
+        self._diffuse = (diffuse_field_implicit_numba
+                         if self.diffusion_solver == 'implicit' else diffuse_field_numba)
+        if self.diffusion_solver == 'implicit':
+            print("INFO: Diffusion solver = implicit ADI (unconditionally stable).")
+
+        # Nutrient uptake kinetics: Km (half-saturation) for Michaelis-Menten/Monod
+        # saturating uptake. <= 0 -> first-order (linear) uptake (default).
+        self.nutrient_uptake_saturation = float(config.get('nutrient_uptake_saturation', -1.0))
 
         # Nutrient boundary condition: 'dirichlet' holds edges at nutrient_bc_value
         # (external reservoir, use for branching/pattern studies).
@@ -188,6 +204,13 @@ class CellSimulation:
 
         # Call the selected function to initialize cells and fields
         self.cells, self.nutrient_field = initializer_func(config, self.physical_size, self.grid_resolution)
+        # Apply configured uptake kinetics to all initial cells (daughters inherit
+        # via Cell.divide). Only overrides the default when a value is set.
+        if self.nutrient_uptake_saturation > 0.0:
+            for c in self.cells:
+                c.uptake_saturation = self.nutrient_uptake_saturation
+            print(f"INFO: Saturating (Michaelis-Menten) uptake ON "
+                  f"(Km = {self.nutrient_uptake_saturation:.3g}).")
         # ----------------------------
 
         # --- Differential adhesion (optional) ---
@@ -493,12 +516,12 @@ class CellSimulation:
             self.attractant_field, self.fluid_velocity, self.dt, self.dx
         )
 
-        # 6. Diffuse scalar fields
-        self.nutrient_field = diffuse_field_numba(
+        # 6. Diffuse scalar fields (solver selected by config: explicit/implicit)
+        self.nutrient_field = self._diffuse(
             self.nutrient_field, self.nutrient_D, self.dt, self.dx,
             self.nutrient_bc_value
         )
-        self.attractant_field = diffuse_field_numba(
+        self.attractant_field = self._diffuse(
             self.attractant_field, self.attractant_D, self.dt, self.dx
         )
 
@@ -510,12 +533,13 @@ class CellSimulation:
         secr = np.array([c.secretion_rate for c in self.cells])
         basal = np.array([c.basal_metabolism_rate for c in self.cells])
         active = np.array([c.active for c in self.cells])
+        sat = np.array([c.uptake_saturation for c in self.cells])
         c0 = self.cells[0]
         reached_div, alive = cell_biology_step_numba(
             cell_positions, radii, nut_acc, cons, secr, basal, active,
             self.nutrient_field, nutrient_to_read, self.attractant_field,
             self.dt, self.dx, c0.area_conserving, c0.min_radius, c0.max_radius,
-            self.enable_quiescence, self.quiescence_threshold)
+            self.enable_quiescence, self.quiescence_threshold, sat)
         for i, cell in enumerate(self.cells):
             cell.nutrient_accumulated = nut_acc[i]
             cell.radius = radii[i]

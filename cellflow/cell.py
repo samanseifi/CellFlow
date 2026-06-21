@@ -20,6 +20,10 @@ class Cell:
         self.area_conserving = area_conserving
         self.nutrient_accumulated = nutrient
         self.consumption_rate = np.random.normal(0.2, 0.05)
+        # Uptake half-saturation constant (Km). <= 0 -> first-order (linear)
+        # uptake; > 0 -> Michaelis-Menten/Monod saturating uptake (consumption_rate
+        # is then the low-concentration rate constant). See absorb_nutrient_numba.
+        self.uptake_saturation = -1.0
         self.secretion_rate = 1.0
         self.basal_metabolism_rate = 0.02
         self.alive = True
@@ -76,7 +80,7 @@ class Cell:
         return a, b, angle
 
     def absorb_nutrient(self, nutrient_to_modify, nutrient_to_read, dt, dx):
-        return absorb_nutrient_numba(self.position, self.radius, nutrient_to_modify, nutrient_to_read, dt, self.consumption_rate, dx)
+        return absorb_nutrient_numba(self.position, self.radius, nutrient_to_modify, nutrient_to_read, dt, self.consumption_rate, dx, self.uptake_saturation)
 
     def secrete_attractant(self, attractant_field, dt, dx):
         total_secretion = self.secretion_rate * dt
@@ -114,6 +118,7 @@ class Cell:
                             area_conserving=self.area_conserving)
             daughter.position = self.position + u * (self.radius + daughter.radius)
             daughter.polarity = self.polarity     # inherit orientation
+            daughter.uptake_saturation = self.uptake_saturation   # inherit kinetics
 
             self.division_partner_id = daughter.id
             daughter.division_partner_id = self.id
