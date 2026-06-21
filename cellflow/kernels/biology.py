@@ -21,7 +21,8 @@ def cell_biology_step_numba(positions, radii, nutrient_acc, consumption_rate,
                             secretion_rate, basal_rate, active,
                             nutrient_field, nutrient_read, attractant_field,
                             dt, dx, area_conserving, min_radius, max_radius,
-                            enable_quiescence, quiescence_threshold):
+                            enable_quiescence, quiescence_threshold,
+                            uptake_saturation):
     """Advance one biology step for all cells, in place.
 
     Updates ``nutrient_acc``, ``radii`` and the ``active`` flags in place,
@@ -59,7 +60,8 @@ def cell_biology_step_numba(positions, radii, nutrient_acc, consumption_rate,
 
         # nutrient uptake over the cell's area (always, so the matrix shadows)
         uptake = absorb_nutrient_numba(positions[k], radii[k], nutrient_field,
-                                       nutrient_read, dt, consumption_rate[k], dx)
+                                       nutrient_read, dt, consumption_rate[k], dx,
+                                       uptake_saturation[k])
         nutrient_acc[k] += uptake
 
         if not active[k]:

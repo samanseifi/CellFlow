@@ -140,6 +140,8 @@ Key & Default & Meaning \\ \midrule \endhead
 \code{physical\_size} & \emph{required} & domain side length $L$ \\
 \code{grid\_resolution} & \emph{required} & grid points per axis $G$ \\
 \code{dt} & \emph{required} & time step $\Delta t$ \\
+\code{diffusion\_substeps} & \code{1} & diffuse the fields $M$ times per step with $\Delta t/M$ (keeps explicit diffusion stable at large $\Delta t$) \\
+\code{fluid\_update\_interval} & \code{1} & recompute the (expensive) Brinkman solve every $K$ steps; velocities re-interpolated from the cached field between (\code{brinkman\_fft}; auto-recomputed with ECM) \\
 \code{seed} & \code{None} & RNG seed (set for reproducibility) \\
 \code{enable\_visualization} & \code{False} & render frames and a GIF \\
 \code{num\_cells} & \emph{required*} & cluster cell count (central\_uniform) \\
@@ -159,6 +161,8 @@ Key & Default & Meaning \\ \midrule \endhead
 \code{chi\_nutrient} & \emph{required} & chemotactic sensitivity to nutrient \\
 \code{attractant\_D} & \emph{required} & attractant diffusivity (set 0 if unused) \\
 \code{chi\_attractant} & \emph{required} & attractant chemotaxis (set 0 if unused) \\
+\code{diffusion\_solver} & \code{'explicit'} & \code{'explicit'} (FTCS, needs $D\,\Delta t/\Delta x^2\le\tfrac14$) or \code{'implicit'} (ADI, unconditionally stable; use for stiff/high-$D$ or quasi-steady runs) \\
+\code{nutrient\_uptake\_saturation} & \code{-1.0} & Michaelis--Menten half-saturation $K_m$; $\le 0 \Rightarrow$ first-order (linear) uptake \\
 \bottomrule
 \end{longtable}
 
@@ -276,8 +280,12 @@ Turn on \code{enable\_mechanotransduction} to have cells align to flow shear, an
 The repository ships runnable studies and demos (each writes a figure or GIF):
 cluster growth, viscosity sweeps and migration, coupling-range, wound closure
 (including a rigorous mobility-controlled and seed-averaged version),
-convergence diagnostics, mechanotransduction, and the poroelastic ECM demos. See
-\code{experiments/README.md} for the catalogue.
+convergence diagnostics, mechanotransduction, the poroelastic ECM demos, a
+Giverso-style colony branching study (\code{giverso\_*.py}), and bioreactor
+diffusion-limited aggregate demos (\code{bioreactor\_aggregate.py},
+\code{bioreactor\_operating\_diagram.py}: necrotic core, critical size, and a
+supply\,$\times$\,metabolism operating diagram). See \code{experiments/README.md}
+for the catalogue.
 
 \section{Reproducibility and testing}
 \begin{itemize}
@@ -289,8 +297,14 @@ convergence diagnostics, mechanotransduction, and the poroelastic ECM demos. See
 
 \section{Tips and common pitfalls}
 \begin{itemize}
-  \item \textbf{Diffusion blow-up:} keep $D\,\Delta t/\Delta x^2 \le 1/4$; the
-        code warns otherwise. Reduce \code{dt} or coarsen the grid.
+  \item \textbf{Diffusion blow-up:} the explicit solver needs
+        $D\,\Delta t/\Delta x^2 \le 1/4$ (the code warns otherwise); reduce
+        \code{dt}, coarsen the grid, or switch to
+        \code{diffusion\_solver='implicit'} (unconditionally stable, ideal for
+        high $D$ or quasi-steady nutrient fields).
+  \item \textbf{Saturating uptake:} set \code{nutrient\_uptake\_saturation}
+        ($K_m$) for Michaelis--Menten kinetics; the default (linear) can
+        over-deplete at high concentration.
   \item \textbf{CFL warning:} if advection looks unstable, reduce \code{dt}.
   \item \textbf{``Hydro off'':} the legacy way of suppressing hydrodynamics was
         a huge viscosity; prefer \code{fluid\_model='brinkman\_fft'} with a

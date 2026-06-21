@@ -4,8 +4,21 @@ from numba import njit
 
 
 @njit(cache=True)
-def absorb_nutrient_numba(position, radius, nutrient_to_modify, nutrient_to_read, dt, consumption_rate, dx):
-    """Calculates nutrient uptake over the entire area of the cell."""
+def absorb_nutrient_numba(position, radius, nutrient_to_modify, nutrient_to_read,
+                          dt, consumption_rate, dx, saturation=-1.0):
+    """Nutrient uptake over the cell's area.
+
+    Kinetics:
+      - ``saturation <= 0`` (default): first-order (linear) uptake,
+            rate(C) = consumption_rate * C            -- the original law.
+      - ``saturation > 0``: Michaelis-Menten / Monod saturating uptake with
+        half-saturation constant Km = ``saturation``,
+            rate(C) = consumption_rate * C * Km/(Km + C).
+        Here ``consumption_rate`` is the LOW-concentration rate constant, so the
+        scheme reduces exactly to the linear law as Km -> inf, while the uptake
+        per point saturates at consumption_rate*Km as C grows (real cells cannot
+        consume arbitrarily fast). consumption_rate is spread over the cell area.
+    """
     total_uptake = 0.0
     x_center_idx, y_center_idx = int(position[0] / dx), int(position[1] / dx)
     r_idx = int(np.ceil(radius / dx))
@@ -20,8 +33,12 @@ def absorb_nutrient_numba(position, radius, nutrient_to_modify, nutrient_to_read
             if dist_sq <= radius**2:
                 y, x = y_center_idx + i, x_center_idx + j
                 if 0 <= y < nutrient_to_read.shape[0] and 0 <= x < nutrient_to_read.shape[1]:
-                    uptake = rate_per_point * nutrient_to_read[y, x] * dt
-                    if uptake > nutrient_to_read[y, x]: uptake = nutrient_to_read[y, x]
+                    C = nutrient_to_read[y, x]
+                    rate = rate_per_point
+                    if saturation > 0.0:
+                        rate = rate_per_point * saturation / (saturation + C)
+                    uptake = rate * C * dt
+                    if uptake > C: uptake = C
                     nutrient_to_modify[y, x] -= uptake
                     total_uptake += uptake
     return total_uptake

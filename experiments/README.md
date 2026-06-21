@@ -26,6 +26,13 @@ python experiments/viscosity_sweep.py
 | `mechanotransduction_demo.py` | Cell polarity aligning to an imposed simple-shear flow: directors go from disordered to the 45° strain axis; nematic order parameter vs time. → `mechanotransduction_demo.png` |
 | `ecm_poroelastic_demo.py` | Poroelastic ECM: a uniform flow reroutes around a growing low-permeability matrix patch; through-flow chokes as ECM builds. → `ecm_poroelastic.png` |
 | `ecm_colony.py` | A growing colony screens its own cell-generated flow by depositing ECM (~30% core-flow reduction); same forces solved with vs without the cell-built drag field. → `ecm_colony.png` |
+| `bioreactor_aggregate.py` | Diffusion-limited aggregate: fresh medium → anoxic **necrotic core** + viable green shell; viable fraction vs aggregate size and the critical-size curve (shell is transport-set, ~size-independent). → `bioreactor_aggregate.gif`, `_montage.png`, `bioreactor_critical_size.png` |
+| `bioreactor_operating_diagram.py` | Bioreactor design map: critical aggregate radius over medium **supply × cell metabolic rate** (transport-safe vs diffusion-limited corners). → `bioreactor_operating_diagram.png` |
+| `giverso_lcheck.py` | Regime finder for colony fronts: active-rim fraction & thickness vs (D, uptake) — locates the thin-rim regime. |
+| `giverso_extreme.py` | Colony front in the paper's regime + low conversion efficiency: the front goes **unstable** (roughens, seeded mode amplifies, valley cells die) — reproduces the fingering onset. → `giverso_extreme.png` |
+| `giverso_seed.py`, `giverso_nondim.py`, `giverso_fingering.py`, `giverso_branching.py` | Giverso (2015) branching replication: non-dimensional analysis, seeded-mode stability test, diffusion-limited fronts. See `docs/giverso_replication.md`. |
+
+Several studies use the new solver options (`diffusion_solver='implicit'` for stiff/quasi-steady nutrient fields; `nutrient_uptake_saturation` for Monod kinetics) — see the user manual.
 
 ## Verification (pytest)
 
