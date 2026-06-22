@@ -72,6 +72,18 @@ PhysiCell entirely lacks.
   pure extensibility, big architectural lift.
 - **9. MultiCellDS I/O** — ecosystem interoperability.
 
+## Beyond PhysiCell's core — mechanobiology
+
+### Mechanical feedback on proliferation  ✅ DONE
+PhysiCell exposes pressure only via custom data + the rules grammar; CellFlow now
+has it as a first-class mechanism. A per-cell virial **contact pressure**
+(`contact_pressure_celllist_numba`) gates division: above `pressure_threshold` a
+cell grows to full size but stops proliferating (contact inhibition / homeostatic
+pressure), so a colony self-limits to a homeostatic density with growth at the
+uncrowded rim. Config `enable_pressure_inhibition`; demo
+`experiments/mechanics_pressure_inhibition.py`. Natural extensions: stress-tensor
+field output, durotaxis, pressure-modulated motility.
+
 ## Skip — CellFlow already has equivalents
 - Neighbor search (already O(N) linked-cell), heterotypic adhesion (already
   Steinberg differential adhesion), mesh gradients (already `np.gradient`).

@@ -32,6 +32,8 @@ fluid permeability by depositing extracellular matrix.
   differential adhesion driving sorting/engulfment, with `O(N)` linked-cell
   neighbour lists and parallel cell-list overlap resolution.
 - **Mechanotransduction**: cell polarity aligns to the local fluid strain rate.
+- **Mechanical feedback on growth**: per-cell contact (virial) pressure drives
+  contact inhibition / homeostatic pressure — compressed cells stop dividing.
 - **Cell-shape mechanics**: area-conserving viscoelastic ellipse deformation
   under contact stress.
 - **Dynamic ECM**: cells deposit matrix that lowers local permeability and
