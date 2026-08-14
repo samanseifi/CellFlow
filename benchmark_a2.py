@@ -42,5 +42,5 @@ if __name__ == "__main__":
     end_time = time.time()
     
     print(f"Benchmark A.2 (Adhesion) completed in {end_time - start_time:.2f} seconds")
-    print("Output saved to 'A2_simulation.gif' and 'simulation_data_A2/' directory.")
+    print("Output saved to 'A2_simulation.gif' and 'simulation_data/A2/' directory.")
 

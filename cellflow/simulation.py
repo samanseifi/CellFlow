@@ -39,7 +39,8 @@ from .fluid.brinkman_fft import (
     solve_velocity_freeslip_box,
 )
 from .fluid.ibm import spread_forces_blob_numba, interpolate_velocity_blob_numba
-from .kernels.fields import secrete_over_area_numba
+from .kernels.fields import (secrete_over_area_numba,
+                             deposit_over_area_conserving_numba)
 from . import visualization
 from . import io
 
@@ -167,6 +168,21 @@ class CellSimulation:
         self.repulsion_strength = config['repulsion_strength']
         self.division_force_strength = config.get('division_force_strength', 10.0)
 
+        # Chemotactic response law. 'saturated' (default) gives every cell the
+        # same propulsion magnitude and lets chi set only the direction;
+        # 'proportional' makes the magnitude scale with the local chemotactic
+        # drive |chi*grad(c)|, capped at max_propulsive_force. Only the
+        # proportional law can produce a front velocity that responds to local
+        # flux, which is what interfacial (Mullins-Sekerka) instabilities need.
+        response = config.get('propulsion_response', 'saturated')
+        if response not in ('saturated', 'proportional'):
+            raise ValueError("propulsion_response must be 'saturated' or "
+                             f"'proportional', got {response!r}")
+        self.propulsion_proportional = (response == 'proportional')
+        if self.propulsion_proportional:
+            print("INFO: Propulsion response = proportional "
+                  "(force scales with the chemotactic gradient).")
+
         self.hydrodynamics_model = config.get('hydrodynamics_model', 'monopole')
         print(f"INFO: Using '{self.hydrodynamics_model}' model for hydrodynamics.")
 
@@ -216,6 +232,36 @@ class CellSimulation:
                   f"boundary = '{self.fluid_boundary}').")
         else:
             print(f"INFO: Fluid solver = '{self.fluid_model}' (legacy Stokeslet).")
+
+        # Growth-driven expansion (Darcy/Saffman-Taylor front dynamics). Cells
+        # that grow create material in place; that shows up as a volumetric
+        # source in the fluid, div(u) = s, so the colony displaces its
+        # surroundings through a long-range PRESSURE field rather than only by
+        # the local steric overlap projection. This is the mechanism continuum
+        # colony models (e.g. Giverso 2015) use, v = -K grad(p); CellFlow's
+        # Brinkman solver reduces to Darcy when the screening length is short
+        # compared with the colony. Requires fluid_model='brinkman_fft'.
+        #
+        # NOTE (double counting): with this on, growth expands the colony BOTH
+        # through the pressure field and through _resolve_overlaps. Reduce
+        # 'overlap_iterations' (or scale 'growth_source_strength' below) so the
+        # expansion is not counted twice; the right split depends on how much of
+        # the tissue mechanics you want carried by the fluid.
+        self.enable_growth_source = bool(config.get('enable_growth_source', False))
+        self.growth_source_strength = float(config.get('growth_source_strength', 1.0))
+        # Source built at the end of a step from that step's growth, and used by
+        # the NEXT step's fluid solve (one-step lag; the Stokes solve is
+        # quasi-static so this is a splitting choice, not an approximation error
+        # that accumulates). None until the first growth has happened.
+        self.growth_source_field = None
+        if self.enable_growth_source:
+            if self.fluid_model != 'brinkman_fft':
+                raise ValueError(
+                    "enable_growth_source requires fluid_model='brinkman_fft' "
+                    f"(got {self.fluid_model!r}); the legacy Stokeslet path has "
+                    "no pressure field to carry the expansion.")
+            print(f"INFO: Growth-driven expansion ON (div u = s, "
+                  f"strength = {self.growth_source_strength:.3g}).")
 
         # Optional spatial cutoff for Stokeslet calculations.
         # Set to a positive physical distance to skip far-field contributions and
@@ -272,9 +318,12 @@ class CellSimulation:
 
         self.frames = []
         self._cfl_warned = False  # gate to print CFL warning only once
-        self.output_dir = f"simulation_data_{self.config_name}"
-        if not os.path.exists(self.output_dir):
-            os.makedirs(self.output_dir)
+        # Output lives under a single parent directory rather than scattering
+        # simulation_data_<name>/ across the working directory, and is created
+        # LAZILY -- a run that never saves anything (an analysis sweep calling
+        # _simulation_step directly, say) should leave no trace. Creating it
+        # eagerly here left 284 empty directories behind over one study.
+        self.output_dir = os.path.join("simulation_data", self.config_name)
 
         # --- Stability checks ---
         max_D = max(self.nutrient_D, self.attractant_D)
@@ -321,7 +370,7 @@ class CellSimulation:
             grad_nutrient_x, grad_nutrient_y,
             self.chi_nutrient, self.walk_speed,
             self.config['max_propulsive_force'], self.dx,
-            noise
+            noise, self.propulsion_proportional
         )
 
         if self.use_neighbor_list and len(radii) > 0:
@@ -406,6 +455,35 @@ class CellSimulation:
             secrete_over_area_numba(cell.position, cell.radius, self.ecm_field,
                                     amount, self.dx)
         return self.brinkman_alpha + self.ecm_drag_coeff * self.ecm_field
+
+    def _build_growth_source(self, positions, radii_before, radii_after):
+        """Volumetric source density from this step's cell growth.
+
+        A cell whose area goes from A_old to A_new over dt produces area at rate
+        (A_new - A_old)/dt. Spreading that over the cell's footprint gives a
+        source DENSITY s (units 1/time) with
+
+            integral of s dA  ==  sum over cells of dA_k/dt
+
+        ``deposit_over_area_conserving_numba`` distributes a total AMOUNT over
+        the cell area, i.e. it makes ``sum(field) == amount``; we want
+        ``sum(field)*dx**2 == rate``, hence the ``/dx**2``. The conserving
+        variant is required here (not ``secrete_over_area_numba``): the integral
+        of the source is the volume the colony pushes out, so an amplitude error
+        is an error in the driving flow.
+
+        Shrinking cells give a negative (sink) contribution, which is correct:
+        material is being removed.
+        """
+        source = np.zeros((self.grid_resolution, self.grid_resolution))
+        area_rate = np.pi * (radii_after ** 2 - radii_before ** 2) / self.dt
+        scale = self.growth_source_strength / (self.dx ** 2)
+        for i in range(len(radii_after)):
+            if area_rate[i] != 0.0:
+                deposit_over_area_conserving_numba(
+                    positions[i], radii_after[i], source,
+                    area_rate[i] * scale, self.dx)
+        return source
 
     def _update_shapes(self, cell_positions, radii):
         """Evolve each cell's deviatoric strain toward chi * (deviatoric contact
@@ -492,16 +570,19 @@ class CellSimulation:
                     self.fluid_velocity, self._ecm_iters, self._ecm_residual = \
                         solve_velocity_variable_alpha(
                             force_density, mu=self.viscosity, dx=self.dx,
-                            alpha_field=alpha_field)
+                            alpha_field=alpha_field,
+                            source=self.growth_source_field)
                 elif self.fluid_boundary == 'freeslip_box':
                     self.fluid_velocity = solve_velocity_freeslip_box(
                         force_density, mu=self.viscosity, dx=self.dx,
                         alpha=self.brinkman_alpha,
+                        source=self.growth_source_field,
                     )
                 else:
                     self.fluid_velocity = solve_velocity(
                         force_density, mu=self.viscosity, dx=self.dx,
                         alpha=self.brinkman_alpha,
+                        source=self.growth_source_field,
                     )
             precomputed_cell_velocities = interpolate_velocity_blob_numba(
                 self.fluid_velocity, cell_positions, sigmas, self.dx
@@ -585,6 +666,9 @@ class CellSimulation:
         else:
             pressure = np.zeros(len(self.cells))
         c0 = self.cells[0]
+        # Radii before growth, so the volumetric source can be built from the
+        # area actually produced this step (the kernel updates radii in place).
+        radii_before = radii.copy() if self.enable_growth_source else None
         reached_div, alive = cell_biology_step_numba(
             cell_positions, radii, nut_acc, cons, secr, basal, active,
             self.nutrient_field, nutrient_to_read, self.attractant_field,
@@ -599,6 +683,12 @@ class CellSimulation:
                 cell.phase = 'DIVISION'
             if not alive[i]:
                 cell.alive = False
+
+        # Growth-driven expansion: build the volumetric source from the area
+        # produced this step. Used by the NEXT step's fluid solve (see __init__).
+        if self.enable_growth_source:
+            self.growth_source_field = self._build_growth_source(
+                cell_positions, radii_before, radii)
 
         # 8. Compute cell velocities via mobility relation:
         #    v_k = F_k/(6*pi*mu*R_k) + sum_{j!=k} G(x_k,x_j).F_j
@@ -693,9 +783,16 @@ class CellSimulation:
             self._create_gif()
 
     # --- Visualization / IO delegate to the dedicated modules ---
+    def _ensure_output_dir(self):
+        """Create the output directory on first write (see __init__)."""
+        if not os.path.isdir(self.output_dir):
+            os.makedirs(self.output_dir, exist_ok=True)
+        return self.output_dir
+
     def _save_frame(self, step):
         filepath = visualization.render_frame(
-            self.nutrient_field, self.cells, self.physical_size, step, self.output_dir
+            self.nutrient_field, self.cells, self.physical_size, step,
+            self._ensure_output_dir()
         )
         self.frames.append(filepath)
 
@@ -705,6 +802,6 @@ class CellSimulation:
     def _save_data_npz(self, step):
         io.save_data_npz(
             self.cells, self.nutrient_field, self.attractant_field,
-            self.fluid_velocity, self.config, self.output_dir,
+            self.fluid_velocity, self.config, self._ensure_output_dir(),
             self.config_name, step
         )
