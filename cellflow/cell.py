@@ -119,9 +119,22 @@ class Cell:
             daughter = Cell(self.position.copy(), self.nutrient_accumulated,
                             just_divided_timer=5, cell_type=self.cell_type,
                             area_conserving=self.area_conserving)
-            daughter.position = self.position + u * (self.radius + daughter.radius)
             daughter.polarity = self.polarity     # inherit orientation
             daughter.uptake_saturation = self.uptake_saturation   # inherit kinetics
+            # Inherit the metabolic and size phenotype. Previously a daughter kept
+            # the fresh np.random.normal(0.2, 0.05) consumption rate and default
+            # radii drawn in __init__, so a growing population reverted to the
+            # default phenotype no matter what the parents were set to -- which
+            # silently erases any cell-to-cell heterogeneity (and with it clonal
+            # sectors, the one persistent macroscopic noise source a colony has).
+            # The __init__ draw still happens, so the RNG stream is unchanged.
+            daughter.consumption_rate = self.consumption_rate
+            daughter.basal_metabolism_rate = self.basal_metabolism_rate
+            daughter.secretion_rate = self.secretion_rate
+            daughter.min_radius = self.min_radius
+            daughter.max_radius = self.max_radius
+            daughter.update_radius()              # radii changed -> recompute
+            daughter.position = self.position + u * (self.radius + daughter.radius)
 
             self.division_partner_id = daughter.id
             daughter.division_partner_id = self.id
