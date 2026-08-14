@@ -323,6 +323,39 @@ predicts a large-amplitude morphology run it was not fitted to.
 So the answer to "can we just look at the fingers?" is: fingers do not appear from
 noise, and do not survive when supplied.
 
+## CORRECTION (2026-08-14): the "no local flux response" claim is retracted
+
+The section that follows concluded that the front has no flux response, from a
+measured elasticity E = 0.027. **That measurement was made with
+`chi_nutrient = 0.0`** — chemotaxis entirely disabled — and the saturated
+propulsion law. There was no mechanism by which the front *could* respond to
+flux, so measuring ~0 was a tautology, not a property of the model. It was then
+generalised into a claim about CellFlow as a whole, which is wrong.
+
+Re-measured with chemotaxis on and the flux-proportional law, and grid-converged:
+
+| grid | dx | ℓ/dx | E (small lobe) |
+|---|---|---|---|
+| G=200 | 4.00 | 2.2 | +0.869 |
+| G=400 (the study's) | 2.00 | 4.5 | **+1.729** |
+| G=800 | 1.00 | 8.9 | **+1.825** |
+
+**E ≈ 1.7–1.8**, converging to ~5% between G=400 and G=800, and right where
+Mullins–Sekerka requires it. The driver was present all along.
+
+Resolution is a real but secondary effect: coarsening to ℓ/dx = 2.2 halves E
+(1.73 → 0.87), so under-resolving the diffusive boundary layer does damp flux
+focusing. At the study's resolution the measurement was adequately converged —
+but **no grid-convergence check was ever run**, and one belongs in the harness
+alongside the other validity guards.
+
+**What this leaves open.** With E ≈ 1.7 *and* σ ≈ 0 — a strong driver and no
+capillary stabiliser — the front should be violently unstable, and it is not. The
+remaining suppressor has not been identified. The linear-in-k damping is the
+obvious suspect and its origin was never determined. Everything below about
+σ, the rectangle test, the interface width, roughness saturation and substrate
+tracing still stands; only the "no driver" conclusion falls.
+
 ## The decisive diagnostic: there is no local front response
 
 The dispersion shape already says which term is missing. Fitting the measured
