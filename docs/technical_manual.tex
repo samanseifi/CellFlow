@@ -38,6 +38,9 @@ feature of CellFlow is a \emph{two-way} coupling to the fluid: cells exert
 forces on the fluid, the fluid transports the chemical fields and moves the
 cells, cells \emph{sense} the local fluid shear (mechanotransduction), and cells
 \emph{remodel} the fluid's permeability by depositing extracellular matrix.
+Cell biology also feeds back on mechanics: a cell's proliferation can be gated by
+its own compressive contact pressure (contact inhibition / homeostatic pressure,
+Section~\ref{sec:pressure}).
 
 The state of the system at time $t$ consists of
 \begin{itemize}
@@ -90,6 +93,20 @@ $b\,\dt$ with $b=0.02$, and optionally secretes attractant at rate $s=1.0$:
 \end{equation}
 A cell dies (is removed) when $n_i < 0$.
 
+\paragraph{Uptake kinetics.} The local uptake rate as a function of the ambient
+concentration $c$ is selectable. By default it is \emph{first-order} (linear),
+$q(c)=k_i\,c$. Setting a half-saturation constant $K_m$ (per cell, or globally
+via \texttt{nutrient\_uptake\_saturation}) switches to \emph{Michaelis--Menten /
+Monod} saturating kinetics,
+\begin{equation}
+  q(c) = k_i\,c\,\frac{K_m}{K_m + c},
+\end{equation}
+so that $k_i$ is the low-concentration rate constant ($q\to k_i c$ as
+$c\ll K_m$) and the uptake saturates at $k_i K_m$ for $c\gg K_m$ (a cell cannot
+consume arbitrarily fast). The linear law is recovered exactly as
+$K_m\to\infty$. Saturating uptake reshapes the nutrient profile and is the
+realistic regime for diffusion-limited aggregates and colony fronts.
+
 \subsection{Size models}
 CellFlow provides two growth laws, selected by \texttt{growth\_model}.
 
@@ -122,6 +139,23 @@ overlapping). The daughter inherits cell type, polarity, and growth mode; its
 deviatoric shape strain starts at zero (a newborn is round). For a brief window
 after division the mother--daughter pair feel a mutual separating force.
 
+\subsection{Mechanical feedback on growth}\label{sec:pressure}
+By default a cell's biology is mechanically blind: it exerts and feels contact
+forces but proliferates regardless of how crowded it is. Optionally
+(\texttt{enable\_pressure\_inhibition}) cells respond to compressive stress via
+\emph{contact inhibition of proliferation} / a homeostatic pressure. Each cell is
+assigned a scalar (virial) contact pressure from its repulsive overlaps,
+\begin{equation}
+  P_i = \frac{1}{2 A_i}\sum_{j}\,\vf_{ij}\cdot\vr_{ij}, \qquad A_i = \pi R_i^2,
+\end{equation}
+where the sum runs over overlapping neighbours and $\vf_{ij}\cdot\vr_{ij}\ge 0$
+under repulsion (compression). Unlike the net force, $P_i$ does not cancel under
+isotropic squeezing, so it measures mechanical crowding. When $P_i$ exceeds
+\texttt{pressure\_threshold} the cell grows to full size but does not divide
+(its stored nutrient is capped at the division threshold). The compressed colony
+core therefore arrests while the uncrowded rim keeps proliferating, and the
+population settles to a homeostatic density rather than overgrowing.
+
 \section{Chemical fields}\label{sec:fields}
 
 Each scalar field $c \in \{N, A\}$ obeys advection--diffusion with cellular
@@ -135,15 +169,40 @@ cellular uptake/secretion. Boundary conditions for the nutrient field are
 selectable: \emph{Neumann} (no-flux, isolated system) or \emph{Dirichlet}
 (edges held at a constant reservoir value, modelling an external medium).
 
-\paragraph{Diffusion.} An explicit five-point (FTCS) scheme is used,
+\paragraph{Diffusion.} Two solvers are available, selected by
+\texttt{diffusion\_solver}. The default \emph{explicit} five-point (FTCS) scheme,
 \begin{equation}
   c^{m+1}_{ij} = c^{m}_{ij}
   + \frac{D_c \dt}{\dx^2}\left(c_{i-1,j}+c_{i+1,j}+c_{i,j-1}+c_{i,j+1}-4c_{ij}\right),
 \end{equation}
-clamped to be non-negative. It is stable when the diffusion number
-$D_c\dt/\dx^2 \le 1/4$; the code warns when this is violated. Under no-flux
-boundaries the discrete scheme is conservative in the interior (verified) but
-the node-centred ghost treatment is not strictly flux-conservative at the walls.
+clamped to be non-negative, is stable only when the diffusion number
+$D_c\dt/\dx^2 \le 1/4$ (the code warns otherwise).
+
+The \emph{implicit} solver (\texttt{diffusion\_solver='implicit'}) is an
+alternating-direction implicit (ADI, Peaceman--Rachford) scheme: each step is two
+half-steps, the first implicit in $x$ and explicit in $y$, the second the reverse,
+\begin{align}
+  \big(\mathcal{I} - \tfrac{r}{2}\,\delta_x^2\big)c^{*}
+   &= \big(\mathcal{I} + \tfrac{r}{2}\,\delta_y^2\big)c^{m}, \\
+  \big(\mathcal{I} - \tfrac{r}{2}\,\delta_y^2\big)c^{m+1}
+   &= \big(\mathcal{I} + \tfrac{r}{2}\,\delta_x^2\big)c^{*},
+\end{align}
+with $r = D_c\dt/\dx^2$ and $\delta^2$ the second-difference operator. Each
+half-step is a set of independent tridiagonal systems solved by the Thomas
+algorithm ($O(M)$), parallelized over lines. ADI is \emph{unconditionally stable}
+(any $\dt$), second order in space and time, and preserves the discrete steady
+state exactly (a uniform field at the Dirichlet value is a fixed point), so it
+reaches the quasi-steady profile in far fewer steps than the explicit scheme and
+without a CFL limit on $D$. Because CellFlow advects fields by the flow, the
+overall scheme is IMEX (implicit diffusion combined with the semi-Lagrangian
+advection below), which keeps the cell--fluid coupling intact. ADI is
+$L^2$-stable rather than strictly maximum-principle-preserving, so very large
+steps can produce small ($\sim$few-percent) over/undershoots, and with a fixed
+step it converges to the exact steady state gradually (no parameter cycling).
+
+Under no-flux (Neumann) boundaries the explicit scheme is conservative in the
+interior (verified) but the node-centred ghost treatment is not strictly
+flux-conservative at the walls.
 
 \paragraph{Advection.} A semi-Lagrangian scheme back-traces each grid point
 along $-\vu\,\dt$ and interpolates bilinearly. It is unconditionally stable but
@@ -294,6 +353,67 @@ contrast; very high contrast would warrant a preconditioned Krylov solver
 spatially-varying manufactured solution (to $10^{-6}$), and flow screening
 through a high-drag patch.
 
+\subsection{Growth-driven expansion (volumetric source)}\label{sec:growthsource}
+Cells that grow create material in place. Setting
+\texttt{enable\_growth\_source} adds this to the fluid as a volumetric source,
+replacing the incompressibility constraint in \eqref{eq:brinkman} with
+\begin{equation}
+  -\mu\grad^2\vu + \alpha\,\vu + \grad p = \vf, \qquad
+  \grad\cdot\vu = s(\vx),
+  \label{eq:brinkman-source}
+\end{equation}
+where $s$ is the rate at which cells produce area per unit area. The colony then
+displaces its surroundings through a long-range \emph{pressure} field rather than
+only through the local steric overlap projection---the Darcy/Saffman--Taylor
+mechanism used by continuum colony models, $\bm{v} = -K_p\grad p$. Note that
+\eqref{eq:brinkman-source} reduces to Darcy's law when $\delta$ is small compared
+with the colony, so this is the continuum mechanism itself and not an analogy.
+
+Decompose $\vu = \bm{w} + \grad\phi$ with $\grad^2\phi = s$ and
+$\grad\cdot\bm{w} = 0$. The potential part contributes
+$-\mu\grad^2\grad\phi + \alpha\grad\phi = -\mu\grad s + \alpha\grad\phi$. For
+\emph{constant} $\alpha$ both terms are gradients and are absorbed into the
+pressure, so the two parts separate exactly and
+\begin{equation}
+  \hat{\vu}(\vk) = \frac{\mathsf{P}(\vk)\hat{\vf}(\vk)}{\mu\lvert\vk\rvert^2+\alpha}
+  \;-\; \frac{i\vk\,\hat{s}(\vk)}{\lvert\vk\rvert^2}.
+\end{equation}
+For variable $\alpha(\vx)$ the term $\alpha\grad\phi$ is not a gradient; it
+survives as a body force, so the split remains exact provided the solenoidal part
+is driven by $\vf - \alpha(\vx)\grad\phi$. Both cases are implemented.
+
+\paragraph{Building $s$ from cell growth.} A cell whose area goes from $A_k^{n}$
+to $A_k^{n+1}$ over $\dt$ produces area at rate $(A_k^{n+1}-A_k^{n})/\dt$, spread
+over its footprint, so that
+$\int s\,\mathrm{d}A = \sum_k \mathrm{d}A_k/\mathrm{d}t$. Shrinking cells
+contribute a sink, which is correct. This requires a deposition kernel that
+conserves the total: the general-purpose secretion kernel normalizes by the
+\emph{analytic} point count $\pi(R/\dx)^2$ rather than the number of grid points
+it actually writes to, which is harmless for a secretion amplitude but misstates
+the deposited total by tens of percent at low resolution---and here the integral
+of $s$ \emph{is} the volume the colony pushes out, so an amplitude error is an
+error in the driving flow (Gauss). A separate conserving kernel is used.
+
+Because $\grad\cdot\vu = s$ has a periodic solution only if $s$ has zero mean,
+the mean is subtracted: physically, a uniform far-field drain removing the fluid
+the colony displaces. This is accurate while the colony is small compared with the
+box. The source is built from the area produced during a step and applied at the
+next one (a one-step lag; the Stokes solve is quasi-static, so this is a splitting
+choice rather than an accumulating error).
+
+Verification: a manufactured potential is recovered to machine precision; the
+divergence matches the mean-removed source (exactly for a band-limited source, and
+to the source's Nyquist content otherwise); the flux through a circle equals the
+enclosed source (Gauss); and the far field follows the 2D point-source law
+$u_r = Q/2\pi r$ to within $3\%$.
+
+\emph{Double counting.} With this enabled, growth expands the colony both through
+the pressure field and through the overlap projection of
+Section~\ref{sec:forces}. Reduce \texttt{overlap\_iterations}, or scale
+\texttt{growth\_source\_strength}, so the expansion is not counted twice; the
+appropriate split depends on how much of the tissue mechanics the fluid should
+carry.
+
 \subsection{Immersed Boundary coupling}\label{sec:ibm}
 Cells couple to the grid fluid by the Immersed Boundary Method. A cell force
 $\vf_i$ is \emph{spread} to a grid force density with a per-cell Gaussian blob of
@@ -398,28 +518,126 @@ tumour stroma, interstitial flow, and durotaxis).
 \begin{itemize}
   \item \textbf{Time integration:} forward Euler for cell positions and the
         ODE-like polarity/shape relaxations (first order in $\dt$).
-  \item \textbf{Diffusion:} explicit FTCS; stable for $D\dt/\dx^2 \le 1/4$.
+  \item \textbf{Diffusion:} selectable --- explicit FTCS (stable for
+        $D\dt/\dx^2 \le 1/4$) or implicit ADI (Peaceman--Rachford, Thomas solves,
+        unconditionally stable, second order, IMEX with the flow advection).
+  \item \textbf{Uptake:} first-order (linear) or Michaelis--Menten/Monod
+        saturating kinetics.
   \item \textbf{Advection:} semi-Lagrangian; the code warns when the CFL number
         $\max\lvert\vu\rvert\,\dt/\dx > 1$.
   \item \textbf{Fluid:} spectral (FFT) for Brinkman, $O(M\log M)$; Picard
         iteration for variable drag.
-  \item \textbf{Pairwise forces:} linked-cell neighbour lists, $O(N)$.
+  \item \textbf{Pairwise forces:} linked-cell neighbour lists, $O(N)$; an optional
+        per-cell virial contact pressure (same linked-cell structure) drives
+        mechanical feedback on proliferation.
+  \item \textbf{Multi-timescale splitting:} optional decoupling of fast transport
+        from the slow/expensive steps. \texttt{diffusion\_substeps} $M$ applies the
+        diffusion solver $M$ times per step with $\dt/M$ (keeps the explicit scheme
+        stable when $D\dt/\dx^2>\tfrac14$ overall, and relaxes the field toward
+        quasi-steady). \texttt{fluid\_update\_interval} $K$ recomputes the
+        expensive Brinkman solve only every $K$ steps, re-interpolating cell
+        velocities from the cached field each step (bounded staleness; always
+        recomputed when the ECM drag field is active).
 \end{itemize}
+
+\section{Colony-front analysis}\label{sec:front}
+
+The module \texttt{cellflow.analysis.front} provides quantitative diagnostics for
+a growing colony boundary. It takes plain arrays (positions, radii) rather than a
+\texttt{CellSimulation}, so it can be tested against analytic shapes.
+
+\subsection{Extracting the front}
+The front $R(\theta)$ is sampled on $n_\theta$ equal angular bins about a given
+centre, taking the \emph{outermost} cell in each bin (empty bins are filled by
+periodic interpolation). Taken naively this measure is dangerous: whenever cells
+detach from the colony---which happens for weak adhesion and a starving rim---a
+handful of strays per bin inflates the radius, and the front reads as rough while
+the actual colony is smooth. All front quantities are therefore computed on the
+\textbf{largest connected cluster}, where two cells are connected when
+\begin{equation}
+  \lvert \vx_i - \vx_j\rvert < \eta\,(R_i + R_j),
+\end{equation}
+with $\eta=1.3$ by default ($\eta=1$ is exactly touching). Components are labelled
+by union--find over the existing linked-cell grid, so the cost is $O(N)$.
+
+\subsection{Mode amplitudes and growth rates}
+The dimensionless amplitude of angular mode $k$ is
+\begin{equation}
+  a_k = \frac{2\,\lvert \mathcal{F}_k[R - \langle R\rangle]\rvert}
+             {n_\theta\,\langle R\rangle},
+\end{equation}
+normalized so that a front $R=R_0(1+\varepsilon\cos k\theta)$ gives exactly
+$a_k=\varepsilon$, independent of $R_0$. A linear instability grows as
+$a_k(t)=a_k(0)e^{\lambda t}$, so $\lambda$ is obtained by least squares on
+$\log a_k$ against $t$. Fitting the logarithm (rather than taking an
+end-to-start ratio) is what separates genuine exponential growth from a transient
+excursion: a non-exponential series shows up as a poor $r^2$ even when the
+endpoints happen to lie above the start.
+
+Two conventions coexist. The \emph{relative} rate uses $a_k=\delta_k/R$ and is the
+fingering criterion (the shape deviating more and more); the \emph{absolute} rate
+uses $\delta_k$. On a colony expanding at rate $\mathrm{d}\ln R/\mathrm{d}t$ the
+two differ by exactly that rate.
+
+\subsection{Resolution limit}
+A mode cannot be tracked once its lobe amplitude falls below roughly one cell
+radius, i.e. below $a_k \sim a/R$. In that regime the measured decay flattens and
+\emph{understates} the true rate. Any dispersion measurement must therefore keep
+the seeded amplitude well above $a/R$ throughout the fit window; this is enforced
+as a validity condition in \texttt{experiments/giverso\_dispersion.py}, alongside
+checks that the front is advancing, that the colony is not shedding, that the
+quasi-steady nutrient field reached a fixed point, and that the advective CFL
+number stays below one.
+
+\subsection{Effective capillary length}
+For a growing front stabilized by surface tension, the marginal mode $k_0$ (where
+$\lambda$ changes sign) scales as $k_0\sim\sqrt{R/d_0}$ with $d_0$ the capillary
+length. Measuring $k_0$ therefore yields
+\begin{equation}
+  d_0 \;\sim\; R/k_0^2,
+\end{equation}
+an order-of-magnitude estimate of the model's effective surface tension expressed
+as a length. In CellFlow's soft-particle mechanics this comes out at a few cell
+radii (Section~\ref{sec:limits}), which bounds how many fingers a colony of a
+given size can support.
 
 \section{Verification and validation}\label{sec:vv}
 
-CellFlow ships an automated test suite (87 tests) including:
+CellFlow ships an automated test suite (266 tests) including:
 \begin{itemize}
   \item \textbf{Solver verification:} a Method of Manufactured Solutions test
         recovers a multi-mode divergence-free field to machine precision for
         both constant and spatially-varying drag.
+  \item \textbf{Growth-driven expansion} (Section~\ref{sec:growthsource}): a
+        manufactured potential is recovered exactly; the solved divergence equals
+        the mean-removed source (to machine precision for a band-limited source,
+        and otherwise to that source's Nyquist content, which is pinned to its
+        analytic value rather than absorbed by a loose tolerance); the flux
+        through a circle equals the enclosed source (Gauss); and the far field
+        follows the 2D point-source law $u_r = Q/2\pi r$ to within $3\%$. The
+        source contribution superposes linearly and is independent of $\mu$ and
+        $\alpha$, as the pressure-absorption argument requires.
+  \item \textbf{Front analysis} (Section~\ref{sec:front}): mode amplitudes are
+        exact on analytic fronts; growth rates are recovered from synthetic
+        colonies with a known $\lambda$; and a neutral front polluted with a
+        growing number of detached cells returns $\lambda\approx 0$, which is the
+        specific artifact the connected-cluster filter exists to prevent.
   \item \textbf{Convergence:} grid refinement studies confirm that the IBM
         self-mobility and hydrodynamic interactions converge; the timestep error
         scales as $\dt^1$ (forward Euler); the advection scheme conserves mass
         in the interior.
+  \item \textbf{Transport solvers:} the implicit ADI diffusion is verified
+        unconditionally stable at $\dt$ far beyond the explicit CFL limit, exact
+        on the uniform steady state, mass-conserving under Neumann, and in
+        agreement with the explicit scheme over a transient at small $\dt$.
+        Multi-timescale: sub-stepping keeps explicit diffusion bounded at $4\times$
+        the CFL limit; the coarse fluid cadence reproduces the every-step run on
+        step~0 and remains stable with the cached field.
   \item \textbf{Physics checks:} screening monotonicity; mechanotransduction
         alignment to the correct strain axis; cell-shape response to uniaxial vs
-        isotropic stress; area-conserving division.
+        isotropic stress; area-conserving division; Michaelis--Menten uptake
+        (reduces uptake at high concentration, recovers the linear law as
+        $K_m\to\infty$, saturates, stays non-negative).
   \item \textbf{Reproducibility:} with a seed, runs are bit-for-bit identical
         and independent of the thread count.
 \end{itemize}
@@ -427,7 +645,7 @@ CellFlow ships an automated test suite (87 tests) including:
 \emph{validation} against experimental data is the user's responsibility for any
 quantitative study, and physical units must be assigned by the user.
 
-\section{Limitations}
+\section{Limitations}\label{sec:limits}
 
 \begin{itemize}
   \item Two spatial dimensions only. Boundaries are either periodic with
@@ -442,6 +660,33 @@ quantitative study, and physical units must be assigned by the user.
         contrast.
   \item Results are in arbitrary units unless the user assigns a unit system.
 \end{itemize}
+
+\paragraph{Cell-scale surface tension bounds interfacial patterning.}
+This one is worth stating explicitly because it constrains a whole class of
+studies. In a soft-particle model the effective surface tension originates in
+cell-scale sterics (repulsion plus the overlap re-rounding projection), so the
+capillary length $d_0$ cannot fall far below one cell radius $a$. Measured via
+$d_0\sim R/k_0^2$ (Section~\ref{sec:front}), it is $3$--$8\,a$ across the regimes
+tested, and it is \emph{larger} when the colony advances by proliferation than
+when cells merely swell. Combined with $k^\ast\sim\sqrt{R/d_0}$, the number of
+fingers a colony can support grows only as the square root of its radius:
+\begin{equation}
+  k^\ast \sim \sqrt{R/d_0} \;\lesssim\; \sqrt{R/3a}.
+\end{equation}
+Resolving a strongly branched morphology ($k^\ast\sim 10$--$30$) therefore
+requires $10^5$--$10^7$ cells. Interfacial instabilities are not forbidden in this
+model class, but at accessible colony sizes only the longest-wavelength modes
+($k\lesssim 5$) are unstable, which produces a lumpy or elongated colony rather
+than fingers. See \texttt{docs/giverso\_replication.md} for the measurements.
+
+\paragraph{Growth-driven expansion.} The volumetric source
+(Section~\ref{sec:growthsource}) carries three caveats: the source mean is
+subtracted (a uniform far-field drain, accurate only while the colony is small
+compared with the box); it is applied with a one-step lag; and it double-counts
+expansion against the overlap projection unless
+\texttt{overlap\_iterations} or \texttt{growth\_source\_strength} is reduced.
+Growth-driven flow can also be fast enough to violate the advective CFL condition
+--- check the reported CFL when enabling it.
 
 \begin{thebibliography}{9}
 \bibitem{cortez} R.~Cortez, \emph{The method of regularized Stokeslets},

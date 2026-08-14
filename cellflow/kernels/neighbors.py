@@ -96,6 +96,54 @@ def repulsion_forces_celllist_numba(positions, radii, repulsion_strength,
 
 
 @njit(parallel=True, cache=True)
+def contact_pressure_celllist_numba(positions, radii, repulsion_strength,
+                                    order, bin_start, nbx, bin_size):
+    """Per-cell compressive contact pressure from repulsive overlaps.
+
+    A scalar (virial) pressure for each cell,
+        P_i = 1/(2 A_i) * sum_j  f_ij . r_ij,   A_i = pi R_i^2,
+    where the sum runs over overlapping neighbours and, for the exponential
+    repulsion, f_ij . r_ij = |f_ij| * d_ij >= 0 (compression). Unlike the net
+    force vector, this does NOT cancel under isotropic squeezing, so it is a
+    monotone measure of how mechanically crowded a cell is -- used to gate
+    proliferation (contact inhibition / homeostatic pressure)."""
+    n = positions.shape[0]
+    pressure = np.zeros(n)
+    for i in prange(n):
+        bx = int(positions[i, 0] / bin_size)
+        by = int(positions[i, 1] / bin_size)
+        if bx < 0: bx = 0
+        elif bx >= nbx: bx = nbx - 1
+        if by < 0: by = 0
+        elif by >= nbx: by = nbx - 1
+        acc = 0.0
+        for dby in range(-1, 2):
+            ny = by + dby
+            if ny < 0 or ny >= nbx:
+                continue
+            for dbx in range(-1, 2):
+                nx = bx + dbx
+                if nx < 0 or nx >= nbx:
+                    continue
+                b = ny * nbx + nx
+                for s in range(bin_start[b], bin_start[b + 1]):
+                    j = order[s]
+                    if j == i:
+                        continue
+                    dx_ = positions[j, 0] - positions[i, 0]
+                    dy_ = positions[j, 1] - positions[i, 1]
+                    dist = np.sqrt(dx_**2 + dy_**2)
+                    touch = radii[i] + radii[j]
+                    if 0.0 < dist < touch:
+                        overlap = touch - dist
+                        force_mag = repulsion_strength * np.exp(3.0 * overlap / touch)
+                        acc += force_mag * dist          # f_ij . r_ij
+        area = np.pi * radii[i] * radii[i]
+        pressure[i] = acc / (2.0 * area) if area > 0.0 else 0.0
+    return pressure
+
+
+@njit(parallel=True, cache=True)
 def adhesion_forces_celllist_numba(positions, radii, adhesion_strength,
                                    adhesion_cutoff_factor,
                                    order, bin_start, nbx, bin_size):

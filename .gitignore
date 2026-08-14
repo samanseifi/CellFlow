@@ -4,8 +4,12 @@
 # Ignore PNG images
 *.png
 
+# Dispersion-sweep results (regenerate with experiments/giverso_dispersion.py)
+experiments/dispersion_*.json
+
 # Ignore generated GIFs and simulation output directories
 *.gif
+simulation_data/
 simulation_data_*/
 
 # Test / tooling caches

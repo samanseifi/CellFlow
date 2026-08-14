@@ -1,16 +1,38 @@
-"""FFT-based incompressible Brinkman (and Stokes) flow solver on a periodic grid.
+"""FFT-based Brinkman (and Stokes) flow solver on a periodic grid.
 
-Solves, for a force density ``f`` on a doubly-periodic grid:
+Solves, for a force density ``f`` and an optional volumetric source ``s`` on a
+doubly-periodic grid:
 
-    -mu * laplacian(u) + alpha * u + grad(p) = f,   div(u) = 0
+    -mu * laplacian(u) + alpha * u + grad(p) = f,   div(u) = s
 
-In Fourier space, for each wavevector k != 0:
+With ``s = 0`` (the default) this is the usual incompressible problem. In
+Fourier space, for each wavevector k != 0:
 
     u_hat(k) = P(k) f_hat(k) / (mu |k|^2 + alpha),   P(k) = I - k k^T / |k|^2
 
 where P is the Leray (divergence-free) projection. The mean mode (k = 0) is
 
     u_hat(0) = f_hat(0) / alpha          (finite when alpha > 0)
+
+**Volumetric source.** A non-zero ``s`` models material being created in place --
+for CellFlow, cells growing and dividing, which is how a colony expands against
+its surroundings (Darcy/Saffman-Taylor front dynamics). Decompose
+``u = w + grad(phi)`` with ``lap(phi) = s`` and ``div(w) = 0``. The potential part
+contributes ``-mu lap(grad phi) + alpha grad(phi) = -mu grad(s) + alpha grad(phi)``.
+For CONSTANT alpha both terms are gradients, absorbed into the pressure, so the
+two parts separate exactly:
+
+    u_hat(k) = P(k) f_hat(k) / (mu |k|^2 + alpha)  -  i k s_hat(k) / |k|^2
+
+For VARIABLE alpha(x), ``alpha(x) grad(phi)`` is not a gradient; it survives as a
+body force, so the split is still exact but the solenoidal part must be driven by
+``f - alpha(x) grad(phi)`` (see :func:`solve_velocity_variable_alpha`).
+
+Note that ``div(u) = s`` has a periodic solution only when ``s`` has zero mean
+(integrate both sides over the torus). A colony with net growth does not, so the
+mean is subtracted: physically, a uniform far-field drain removing the fluid the
+colony displaces. This is a good approximation while the colony is small compared
+with the box, and exact in the limit of a distant boundary.
 
 The substrate-drag term ``alpha`` models dish-bottom / thin-film friction and
 introduces a screening length ``delta = sqrt(mu / alpha)`` beyond which
@@ -54,8 +76,50 @@ def _wavenumbers(shape, dx):
     return KX, KY, K2
 
 
-def solve_velocity(force_density, mu, dx, alpha=0.0, screening_length=None):
-    """Solve incompressible Brinkman/Stokes flow for a periodic force density.
+def potential_flow_from_source(source, dx):
+    """Irrotational flow ``grad(phi)`` carrying a prescribed divergence.
+
+    Solves ``lap(phi) = s - <s>`` spectrally and returns ``u = grad(phi)``, so
+    that ``div(u) = s - <s>`` to spectral accuracy. The mean is removed because
+    ``div(u) = s`` has no periodic solution otherwise (see the module docstring).
+
+    This is the *only* part of the flow that carries the divergence; it is
+    curl-free, so it adds nothing to the vorticity of the solenoidal solution.
+
+    Parameters
+    ----------
+    source : (ny, nx) array
+        Volumetric source density (units of 1/time: rate of volume produced per
+        unit volume).
+    dx : float
+        Grid spacing.
+
+    Returns
+    -------
+    u : (ny, nx, 2) real array
+    """
+    s = np.asarray(source, dtype=np.float64)
+    if s.ndim != 2:
+        raise ValueError(f"source must be a 2D (ny, nx) array, got shape {s.shape}")
+
+    s_hat = np.fft.fft2(s)
+    s_hat[0, 0] = 0.0                       # zero-mean: periodic solvability
+    KX, KY, K2 = _wavenumbers(s.shape, dx)
+    K2_safe = np.where(K2 == 0.0, 1.0, K2)
+
+    # phi_hat = -s_hat/|k|^2  =>  u_hat = i k phi_hat = -i k s_hat / |k|^2
+    ux = np.fft.ifft2(-1j * KX * s_hat / K2_safe).real
+    uy = np.fft.ifft2(-1j * KY * s_hat / K2_safe).real
+
+    u = np.empty(s.shape + (2,), dtype=np.float64)
+    u[:, :, 0] = ux
+    u[:, :, 1] = uy
+    return u
+
+
+def solve_velocity(force_density, mu, dx, alpha=0.0, screening_length=None,
+                   source=None):
+    """Solve Brinkman/Stokes flow for a periodic force density.
 
     Parameters
     ----------
@@ -69,11 +133,14 @@ def solve_velocity(force_density, mu, dx, alpha=0.0, screening_length=None):
         Brinkman substrate-drag coefficient (>= 0). ``alpha = 0`` is pure Stokes.
     screening_length : float, optional
         If given, overrides ``alpha`` via ``alpha = mu / screening_length**2``.
+    source : (ny, nx) array, optional
+        Volumetric source density ``s`` giving ``div(u) = s - <s>``. ``None``
+        (default) is the incompressible problem.
 
     Returns
     -------
     u : (ny, nx, 2) real array
-        Divergence-free velocity field.
+        Velocity field; divergence-free when ``source`` is None.
     """
     if mu <= 0.0:
         raise ValueError("mu must be positive")
@@ -115,6 +182,15 @@ def solve_velocity(force_density, mu, dx, alpha=0.0, screening_length=None):
     u = np.empty_like(force_density)
     u[:, :, 0] = ux
     u[:, :, 1] = uy
+
+    # Add the curl-free part carrying the prescribed divergence. Exact for
+    # constant alpha: its Brinkman residual is a pure gradient (module docstring).
+    if source is not None:
+        if np.shape(source) != force_density.shape[:2]:
+            raise ValueError(
+                f"source shape {np.shape(source)} does not match the force grid "
+                f"{force_density.shape[:2]}")
+        u += potential_flow_from_source(source, dx)
     return u
 
 
@@ -133,7 +209,7 @@ def _mirror_extend(a, axis, parity):
 
 
 def solve_velocity_freeslip_box(force_density, mu, dx, alpha=0.0,
-                                screening_length=None):
+                                screening_length=None, source=None):
     """Incompressible Brinkman/Stokes flow in a box with FREE-SLIP walls.
 
     Solves the same equations as :func:`solve_velocity` on the domain
@@ -176,16 +252,28 @@ def solve_velocity_freeslip_box(force_density, mu, dx, alpha=0.0,
     f_ext[:, :, 0] = fx_ext
     f_ext[:, :, 1] = fy_ext
 
+    # A volumetric source is a SCALAR, so it extends evenly across both walls.
+    # Then phi is even in x and y, giving u_x = d(phi)/dx odd in x / even in y and
+    # u_y odd in y / even in x -- exactly the free-slip symmetry above.
+    s_ext = None
+    if source is not None:
+        s = np.asarray(source, dtype=np.float64)
+        if s.shape != (ny, nx):
+            raise ValueError(
+                f"source shape {s.shape} does not match the force grid {(ny, nx)}")
+        s_ext = _mirror_extend(_mirror_extend(s, axis=1, parity=+1),
+                               axis=0, parity=+1)
+
     u_ext = solve_velocity(f_ext, mu, dx, alpha=alpha,
-                           screening_length=screening_length)
+                           screening_length=screening_length, source=s_ext)
     return u_ext[:ny, :nx, :].copy()
 
 
 def solve_velocity_variable_alpha(force_density, mu, dx, alpha_field,
-                                  tol=1e-7, max_iter=300):
-    """Incompressible Brinkman with a SPATIALLY-VARYING drag alpha(x):
+                                  tol=1e-7, max_iter=300, source=None):
+    """Brinkman with a SPATIALLY-VARYING drag alpha(x):
 
-        -mu*lap(u) + alpha(x) u + grad(p) = f,   div(u) = 0.
+        -mu*lap(u) + alpha(x) u + grad(p) = f,   div(u) = s.
 
     Variable alpha is not diagonal in Fourier, so we split alpha = alpha0 + d(x)
     with alpha0 = max(alpha) and iterate (Picard), using the constant-alpha FFT
@@ -199,14 +287,35 @@ def solve_velocity_variable_alpha(force_density, mu, dx, alpha_field,
     would warrant a preconditioned Krylov solver (future work). Returns
     (u, iterations, residual).
 
+    With a volumetric source, split u = w + grad(phi) with lap(phi) = s. The
+    potential part leaves ``alpha(x) grad(phi)`` behind (not a gradient, so not
+    absorbable into the pressure), which acts as an extra body force on the
+    solenoidal part. The split is still exact -- we solve
+
+        -mu*lap(w) + alpha(x) w + grad(p') = f - alpha(x) grad(phi),  div(w) = 0
+
+    and return ``w + grad(phi)``.
+
     Parameters
     ----------
     alpha_field : (ny, nx) array of non-negative drag values.
+    source : (ny, nx) array, optional
+        Volumetric source density ``s`` giving ``div(u) = s - <s>``.
     """
+    u_pot = None
+    if source is not None:
+        if np.shape(source) != force_density.shape[:2]:
+            raise ValueError(
+                f"source shape {np.shape(source)} does not match the force grid "
+                f"{force_density.shape[:2]}")
+        u_pot = potential_flow_from_source(source, dx)
+        force_density = force_density - alpha_field[:, :, None] * u_pot
+
     alpha0 = float(np.max(alpha_field))
     if alpha0 <= 0.0:
         # uniform Stokes (alpha == 0 everywhere)
-        return solve_velocity(force_density, mu, dx, alpha=0.0), 1, 0.0
+        u = solve_velocity(force_density, mu, dx, alpha=0.0)
+        return (u if u_pot is None else u + u_pot), 1, 0.0
     delta = (alpha_field - alpha0)[:, :, None]      # <= 0, shape (ny,nx,1)
 
     u = solve_velocity(force_density, mu, dx, alpha=alpha0)
@@ -221,6 +330,8 @@ def solve_velocity_variable_alpha(force_density, mu, dx, alpha_field,
         u = u_new
         if residual < tol:
             break
+    if u_pot is not None:
+        u = u + u_pot
     return u, iters, residual
 
 

@@ -25,15 +25,26 @@ fluid permeability by depositing extracellular matrix.
 - **Immersed-boundary coupling** between cells and the fluid grid, with
   grid-convergent mobility.
 - **Chemical transport** by operator splitting (semi-Lagrangian advection +
-  explicit diffusion + cell uptake/secretion).
+  diffusion + cell uptake/secretion), with a selectable diffusion solver
+  (**explicit** FTCS or **implicit** ADI, unconditionally stable) and
+  first-order or **Michaelis–Menten/Monod saturating** uptake.
 - **Cell–cell mechanics**: exponential repulsion, adhesion, and Steinberg
   differential adhesion driving sorting/engulfment, with `O(N)` linked-cell
   neighbour lists and parallel cell-list overlap resolution.
 - **Mechanotransduction**: cell polarity aligns to the local fluid strain rate.
+- **Mechanical feedback on growth**: per-cell contact (virial) pressure drives
+  contact inhibition / homeostatic pressure — compressed cells stop dividing.
 - **Cell-shape mechanics**: area-conserving viscoelastic ellipse deformation
   under contact stress.
 - **Dynamic ECM**: cells deposit matrix that lowers local permeability and
   reroutes flow.
+- **Growth-driven expansion**: cell growth enters the fluid as a volumetric
+  source (`div u = s`), so a colony displaces its surroundings through a
+  long-range pressure field (Darcy, `v = -K grad p`) rather than only by local
+  steric contact.
+- **Front diagnostics** (`cellflow.analysis.front`): connected-cluster
+  filtering, angular-mode spectra, and exponential growth-rate fitting for
+  colony-front linear-stability studies.
 
 ## Installation
 

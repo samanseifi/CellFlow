@@ -5,23 +5,24 @@ import numpy as np
 if __name__ == "__main__":
     # --- Configuration for the main scientific experiment ---
     config = {
-        'dt': 0.05, 
-        'domain_size': (300, 300), # Using a larger domain for better visuals
+        'dt': 0.01,
+        'physical_size': 3000.0,
+        'grid_resolution': 3000,
         'num_cells': 20,
-        
-        'initial_setup': 'central_uniform', 
+
+        'initial_setup_type': 'central_uniform',
         'nutrient_bc_value': 20.0,
 
-        'adhesion_strength': 1.0, 
-        'adhesion_cutoff_factor': 1.8, 
+        'adhesion_strength': 1.0,
+        'adhesion_cutoff_factor': 1.8,
         'repulsion_strength': 50.0,
-        'cell_mobility': 0.1,
         'walk_speed': 0.2,
-        'chi_nutrient': 10.0, 
-        'chi_attractant': 5.0, 
+        'chi_nutrient': 10.0,
+        'chi_attractant': 5.0,
         'viscosity': 10.0,
-        'nutrient_D': 1.0, 
+        'nutrient_D': 1.0,
         'attractant_D': 2.0,
+        'max_propulsive_force': 50.0,
 
         'enable_biology': True,
         'enable_visualization': True,

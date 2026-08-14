@@ -64,7 +64,7 @@ def test_npz_snapshot_written(in_tmp_dir):
     np.random.seed(2)
     sim = CellSimulation(_base_config(), config_name='snap')
     sim.run_simulation(steps=6, save_interval=5)
-    out = os.path.join('simulation_data_snap', 'snap_data_0005.npz')
+    out = os.path.join('simulation_data', 'snap', 'snap_data_0005.npz')
     assert os.path.exists(out)
     data = np.load(out, allow_pickle=True)
     assert data['cell_positions'].shape[0] == len(sim.cells)
@@ -162,3 +162,25 @@ def test_backward_compat_import():
     from cellflow.cellflow_core import CellSimulation as Legacy
     from cellflow import CellSimulation as Top
     assert Legacy is CellSimulation is Top
+
+
+def test_no_output_dir_until_something_is_saved(in_tmp_dir):
+    """A run that never saves must leave no directory behind.
+
+    The output dir used to be created eagerly in __init__, so every analysis
+    sweep that drove _simulation_step directly left an empty
+    simulation_data_<name>/ in the working directory (284 of them accumulated
+    over one study)."""
+    sim = CellSimulation(_base_config(), config_name='quiet')
+    for _ in range(3):
+        sim._simulation_step()
+    assert not os.path.exists('simulation_data')
+    assert not os.path.exists(os.path.join('simulation_data', 'quiet'))
+
+
+def test_output_dir_is_nested_under_one_parent(in_tmp_dir):
+    sim = CellSimulation(_base_config(), config_name='nested')
+    sim.run_simulation(steps=6, save_interval=5)
+    assert os.path.isdir(os.path.join('simulation_data', 'nested'))
+    # and nothing scattered at the top level
+    assert not [d for d in os.listdir('.') if d.startswith('simulation_data_')]

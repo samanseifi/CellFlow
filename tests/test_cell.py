@@ -94,3 +94,75 @@ def test_area_mode_radius_scales_as_sqrt_nutrient():
     full = Cell([0.0, 0.0], nutrient=100.0, area_conserving=True)
     half = Cell([0.0, 0.0], nutrient=50.0, area_conserving=True)
     assert np.isclose(half.radius / full.radius, 1.0 / np.sqrt(2), rtol=1e-9)
+
+
+class TestPhenotypeInheritance:
+    """A daughter must inherit her mother's metabolic and size phenotype.
+
+    Previously she kept the fresh np.random.normal(0.2, 0.05) consumption rate
+    and default radii from __init__, so any imposed cell-to-cell heterogeneity
+    washed out within a generation -- suppressing clonal sectors, which are the
+    only persistent macroscopic noise source in a growing colony.
+    """
+
+    @staticmethod
+    def _mother(**kw):
+        c = Cell(np.array([10.0, 10.0]), nutrient=100.0, area_conserving=True)
+        c.consumption_rate = 0.037
+        c.basal_metabolism_rate = 0.011
+        c.secretion_rate = 2.5
+        c.max_radius = 3.0
+        c.min_radius = 1.5
+        c.uptake_saturation = 42.0
+        c.update_radius()
+        c.phase = 'DIVISION'
+        for k, v in kw.items():
+            setattr(c, k, v)
+        return c
+
+    def test_metabolic_rates_are_inherited(self):
+        m = self._mother()
+        d = m.divide()
+        assert d is not None
+        assert d.consumption_rate == pytest.approx(0.037)
+        assert d.basal_metabolism_rate == pytest.approx(0.011)
+        assert d.secretion_rate == pytest.approx(2.5)
+        assert d.uptake_saturation == pytest.approx(42.0)
+
+    def test_size_limits_are_inherited(self):
+        d = self._mother().divide()
+        assert d.max_radius == pytest.approx(3.0)
+        assert d.min_radius == pytest.approx(1.5)
+
+    def test_daughter_radius_matches_inherited_limits(self):
+        d = self._mother().divide()
+        assert d.radius == pytest.approx(
+            d.max_radius * np.sqrt(d.nutrient_accumulated / 100.0), rel=1e-12)
+
+    def test_daughter_is_placed_at_contact_using_its_own_radius(self):
+        m = self._mother()
+        r_before = m.radius
+        d = m.divide()
+        sep = np.linalg.norm(d.position - m.position)
+        assert sep == pytest.approx(m.radius + d.radius, rel=1e-9)
+        assert sep < r_before + d.radius + 1e-9   # not placed using a stale radius
+
+    def test_heterogeneity_survives_several_generations(self):
+        """Two lineages with different rates must stay different."""
+        lineages = []
+        for rate in (0.01, 0.09):
+            cells = [self._mother(consumption_rate=rate)]
+            for _ in range(3):
+                new = []
+                for c in cells:
+                    c.nutrient_accumulated = 100.0
+                    c.phase = 'DIVISION'
+                    c.update_radius()
+                    d = c.divide()
+                    if d:
+                        new.append(d)
+                cells.extend(new)
+            lineages.append([c.consumption_rate for c in cells])
+        assert all(r == pytest.approx(0.01) for r in lineages[0])
+        assert all(r == pytest.approx(0.09) for r in lineages[1])
+        assert len(lineages[0]) >= 8
