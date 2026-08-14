@@ -64,6 +64,47 @@ def secrete_over_area_numba(position, radius, attractant_field, total_secretion_
 
 
 @njit(cache=True)
+def deposit_over_area_conserving_numba(position, radius, field, total_amount, dx):
+    """Deposit ``total_amount`` over the cell's area, CONSERVING the total.
+
+    Unlike :func:`secrete_over_area_numba`, which divides by the analytic point
+    count ``pi (r/dx)^2``, this counts the grid points it will actually write to
+    and divides by that. The analytic count disagrees with the true count badly
+    at low resolution -- the deposited total is off by -50% at r/dx = 0.8 and
+    +59% at r/dx = 1 -- which is harmless for a secretion amplitude but not for a
+    quantity whose integral is physically fixed.
+
+    Used for the volumetric growth source, where ``integral of s dA`` must equal
+    the rate at which cells produce area, or the flow the colony drives (Gauss's
+    theorem) is wrong by the same factor.
+
+    A cell overlapping the domain edge deposits its whole amount on the in-domain
+    points; a cell entirely outside deposits nothing.
+    """
+    x_center_idx, y_center_idx = int(position[0] / dx), int(position[1] / dx)
+    r_idx = int(np.ceil(radius / dx))
+
+    count = 0
+    for i in range(-r_idx, r_idx + 1):
+        for j in range(-r_idx, r_idx + 1):
+            if (i * dx) ** 2 + (j * dx) ** 2 <= radius ** 2:
+                y, x = y_center_idx + i, x_center_idx + j
+                if 0 <= y < field.shape[0] and 0 <= x < field.shape[1]:
+                    count += 1
+    if count == 0:
+        return 0.0
+
+    per_point = total_amount / count
+    for i in range(-r_idx, r_idx + 1):
+        for j in range(-r_idx, r_idx + 1):
+            if (i * dx) ** 2 + (j * dx) ** 2 <= radius ** 2:
+                y, x = y_center_idx + i, x_center_idx + j
+                if 0 <= y < field.shape[0] and 0 <= x < field.shape[1]:
+                    field[y, x] += per_point
+    return total_amount
+
+
+@njit(cache=True)
 def sample_field_at_cell_numba(position, radius, field, dx):
     """Averages a field (scalar or vector) over the area of a cell."""
     x_center_idx, y_center_idx = int(position[0] / dx), int(position[1] / dx)
