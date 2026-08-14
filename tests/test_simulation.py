@@ -184,3 +184,30 @@ def test_output_dir_is_nested_under_one_parent(in_tmp_dir):
     assert os.path.isdir(os.path.join('simulation_data', 'nested'))
     # and nothing scattered at the top level
     assert not [d for d in os.listdir('.') if d.startswith('simulation_data_')]
+
+
+def test_overlap_relaxation_validated(in_tmp_dir):
+    for bad in (-0.1, 1.5):
+        with pytest.raises(ValueError, match="overlap_relaxation"):
+            cfg = _base_config(); cfg['overlap_relaxation'] = bad
+            CellSimulation(cfg, config_name='bad_relax')
+
+
+def test_overlap_relaxation_default_is_bit_for_bit_unchanged(in_tmp_dir):
+    """Adding the knob must not perturb any existing result.
+
+    The two runs are executed SEQUENTIALLY, not interleaved: CellSimulation
+    seeds the global RNG in __init__ and the per-step random-walk noise is drawn
+    from it, so stepping two sims alternately makes them share one interleaved
+    stream and diverge for reasons that have nothing to do with the knob.
+    """
+    def run(**over):
+        # an explicit seed is required: without one CellSimulation never calls
+        # np.random.seed, so two sequential runs draw different walk noise
+        cfg = _base_config(seed=11); cfg.update(over)
+        sim = CellSimulation(cfg, config_name='relax')
+        for _ in range(5):
+            sim._simulation_step()
+        return np.array([c.position for c in sim.cells])
+
+    assert np.array_equal(run(), run(overlap_relaxation=1.0))

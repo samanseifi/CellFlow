@@ -126,6 +126,24 @@ class CellSimulation:
         # packings faster, reducing transient overlaps after division (issue #21).
         self.overlap_iterations = int(config.get('overlap_iterations', 3))
 
+        # Fraction of each overlap removed per sweep. At 1.0 (default, and the
+        # historical behaviour) the projection places cells at exactly touching
+        # regardless of the adhesion and repulsion forces, which flattens the
+        # cohesive energy landscape: adhesion can then never do work and the
+        # tissue has NO surface tension at any adhesion strength. Below 1.0 the
+        # force balance sets the equilibrium spacing while repeated sweeps still
+        # supply the plastic rearrangement that lets the tissue flow -- the
+        # projection is, as it happens, the model's only source of neighbour
+        # exchange (turning it off leaves a growing colony inflating
+        # anisotropically with 100% neighbour retention). See issue #31.
+        self.overlap_relaxation = float(config.get('overlap_relaxation', 1.0))
+        if not 0.0 <= self.overlap_relaxation <= 1.0:
+            raise ValueError("overlap_relaxation must be in [0, 1], got "
+                             f"{self.overlap_relaxation}")
+        if self.overlap_relaxation != 1.0:
+            print(f"INFO: Overlap relaxation = {self.overlap_relaxation:.3g} "
+                  f"(force balance sets spacing; cohesion can do work).")
+
         # Cell-shape mechanics (issue #22): each cell deforms into an
         # area-conserving ellipse under deviatoric contact stress, by a linear
         # viscoelastic law  d(eps)/dt = (chi*stress - eps)/tau, capped at a max
@@ -748,10 +766,12 @@ class CellSimulation:
                 order, bin_start, nbx = build_cell_list_numba(
                     cell_positions, self.physical_size, bin_size)
                 resolve_overlaps_celllist_numba(
-                    cell_positions, radii, order, bin_start, nbx, bin_size)
+                    cell_positions, radii, order, bin_start, nbx, bin_size,
+                    self.overlap_relaxation)
         else:
             for _ in range(self.overlap_iterations):
-                resolve_overlaps_numba(cell_positions, radii)
+                resolve_overlaps_numba(cell_positions, radii,
+                                       self.overlap_relaxation)
         for i, cell in enumerate(self.cells):
             cell.position = cell_positions[i].copy()
 

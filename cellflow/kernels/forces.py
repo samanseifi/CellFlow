@@ -102,7 +102,7 @@ def calculate_propulsion_forces_numba(positions, radii, grad_x_field, grad_y_fie
 
 
 @njit(cache=True)
-def resolve_overlaps_numba(positions, radii):
+def resolve_overlaps_numba(positions, radii, relaxation=1.0):
     """Resolve pairwise overlaps between cells in-place.
 
     Sequentially processes all pairs; positions are modified directly so the
@@ -111,6 +111,11 @@ def resolve_overlaps_numba(positions, radii):
     The exactly-coincident case (dist ~ 0) is a degenerate tiebreaker: cells are
     separated along a deterministic golden-angle direction (no RNG), so the
     routine is fully reproducible.
+
+    ``relaxation`` scales how much of each overlap is removed per application;
+    see resolve_overlaps_celllist_numba for why anything below 1.0 matters
+    (at 1.0 the projection overrides the force balance and the tissue has no
+    surface tension at any adhesion strength -- issue #31).
     """
     n = len(positions)
     for a in range(n):
@@ -128,7 +133,7 @@ def resolve_overlaps_numba(positions, radii):
                 positions[b, 0] += shift_x
                 positions[b, 1] += shift_y
             elif dist < touch:
-                overlap = touch - dist
+                overlap = relaxation * (touch - dist)
                 inv_dist = 1.0 / dist
                 positions[a, 0] -= 0.5 * overlap * dx_ * inv_dist
                 positions[a, 1] -= 0.5 * overlap * dy_ * inv_dist

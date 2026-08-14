@@ -226,7 +226,8 @@ def differential_adhesion_celllist_numba(positions, radii, types, adhesion_matri
 
 
 @njit(parallel=True, cache=True)
-def resolve_overlaps_celllist_numba(positions, radii, order, bin_start, nbx, bin_size):
+def resolve_overlaps_celllist_numba(positions, radii, order, bin_start, nbx,
+                                    bin_size, relaxation=1.0):
     """Parallel (Jacobi) overlap resolution using the cell list.
 
     Replaces the O(N^2) sequential resolve_overlaps_numba. Each cell reads the
@@ -239,6 +240,17 @@ def resolve_overlaps_celllist_numba(positions, radii, order, bin_start, nbx, bin
 
     The exactly-coincident case is separated along a deterministic golden-angle
     direction (per cell index), preserving reproducibility.
+
+    ``relaxation`` scales the applied displacement. At 1.0 (default, and the
+    historical behaviour) the overlap is removed outright: the projection then
+    places cells at exactly touching REGARDLESS of the adhesion and repulsion
+    forces, which flattens the cohesive energy landscape -- adhesion can never do
+    work, so the tissue has no surface tension at any adhesion strength
+    (measured: rounding is flat over a 120x adhesion sweep, and identical to zero
+    cohesion). Below 1.0 the projection only relieves part of each overlap per
+    step, leaving the force balance to set the equilibrium spacing while repeated
+    application still supplies the plastic rearrangement that lets the tissue
+    flow. See issue #31.
     """
     n = positions.shape[0]
     disp = np.zeros((n, 2))
@@ -282,5 +294,5 @@ def resolve_overlaps_celllist_numba(positions, radii, order, bin_start, nbx, bin
         disp[i, 0] = dxacc
         disp[i, 1] = dyacc
     for i in prange(n):
-        positions[i, 0] += disp[i, 0]
-        positions[i, 1] += disp[i, 1]
+        positions[i, 0] += relaxation * disp[i, 0]
+        positions[i, 1] += relaxation * disp[i, 1]
