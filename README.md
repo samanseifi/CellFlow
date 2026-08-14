@@ -38,6 +38,13 @@ fluid permeability by depositing extracellular matrix.
   under contact stress.
 - **Dynamic ECM**: cells deposit matrix that lowers local permeability and
   reroutes flow.
+- **Growth-driven expansion**: cell growth enters the fluid as a volumetric
+  source (`div u = s`), so a colony displaces its surroundings through a
+  long-range pressure field (Darcy, `v = -K grad p`) rather than only by local
+  steric contact.
+- **Front diagnostics** (`cellflow.analysis.front`): connected-cluster
+  filtering, angular-mode spectra, and exponential growth-rate fitting for
+  colony-front linear-stability studies.
 
 ## Installation
 
