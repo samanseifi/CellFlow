@@ -54,7 +54,7 @@ def calculate_repulsion_forces_numba(positions, radii, repulsion_strength):
 @njit(parallel=True, cache=True)
 def calculate_propulsion_forces_numba(positions, radii, grad_x_field, grad_y_field,
                                        chi_nutrient, walk_speed, max_propulsive_force, dx,
-                                       noise):
+                                       noise, proportional=False):
     """Computes chemotactic propulsion forces for all cells in parallel.
 
     The random-walk noise is supplied as ``noise`` (shape (num_cells, 2)),
@@ -63,6 +63,22 @@ def calculate_propulsion_forces_numba(positions, radii, grad_x_field, grad_y_fie
     its own RNG state that np.random.seed() cannot control (and which depends on
     the thread count), so randomness must be injected rather than drawn inside
     the kernel.
+
+    Response law (``proportional``):
+
+    * ``False`` (default, original behaviour) -- the drive vector is normalized
+      and rescaled to ``max_propulsive_force``. Every cell therefore pushes with
+      the SAME magnitude; ``chi_nutrient`` only sets the direction, by weighting
+      the gradient against the random-walk noise. This is a bang-bang response.
+    * ``True`` -- the magnitude is the drive magnitude itself,
+      ``|chi*grad(c) + walk*noise|``, capped at ``max_propulsive_force``. A cell
+      in a steeper gradient then pushes proportionally harder.
+
+    The distinction matters for interfacial instabilities. Mullins-Sekerka needs
+    the front velocity to respond to the local flux; under the default law it
+    cannot, because a protruding tip sitting in a ten-fold steeper gradient
+    exerts exactly the same force as a cell in a valley. Set ``proportional`` and
+    keep ``max_propulsive_force`` above the typical drive to stay off the cap.
     """
     num_cells = len(positions)
     forces = np.zeros((num_cells, 2))
@@ -76,8 +92,11 @@ def calculate_propulsion_forces_numba(positions, radii, grad_x_field, grad_y_fie
 
         norm = np.sqrt(force_dir_x**2 + force_dir_y**2)
         if norm > 0.0:
-            forces[i, 0] = (force_dir_x / norm) * max_propulsive_force
-            forces[i, 1] = (force_dir_y / norm) * max_propulsive_force
+            magnitude = max_propulsive_force
+            if proportional and norm < max_propulsive_force:
+                magnitude = norm
+            forces[i, 0] = (force_dir_x / norm) * magnitude
+            forces[i, 1] = (force_dir_y / norm) * magnitude
 
     return forces
 
