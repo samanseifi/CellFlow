@@ -229,7 +229,7 @@ def main():
     return results
 
 
-if __name__ == '__main__' and 'trapped' not in sys.argv and 'screening' not in sys.argv:
+if __name__ == '__main__' and not ({'trapped','screening','friction'} & set(sys.argv)):
     main()
 
 
@@ -316,3 +316,44 @@ def screening_test(steps=3000):
 
 if __name__ == '__main__' and 'screening' in sys.argv:
     screening_test(3000)
+
+
+def friction_test(steps=3000):
+    """ACCEPTANCE GATE for issue #32: does the local friction law round a square?
+
+    Under the fluid law the answer is no, and adhesion strength makes no
+    difference, because v_cell = u_fluid(x_cell) advects every cell by one
+    smooth field and neighbours can never exchange places. The friction law
+    solves gamma_sub v_i + sum_j gamma_cc w_ij (v_i - v_j) = F_i instead, which
+    is local and does permit relative motion.
+
+    The gate has two halves, and both must pass:
+      1. the square must actually round (circularity -> 1, a4 -> 0);
+      2. it must round FASTER with stronger adhesion, since it is the adhesive
+         well that supplies the driving force.
+    Half 2 matters as much as half 1: rounding that does not respond to adhesion
+    is the pack relaxing, not a surface tension.
+    """
+    print("\nACCEPTANCE GATE (#32): local friction velocity law")
+    print("  gamma_sub = substrate drag; gamma_cc = cell-cell friction\n")
+    out = []
+    for ad in (0.0, 0.5, 5.0, 50.0):
+        out.append(run(f"friction, adhesion={ad}",
+                       square_regime(velocity_model='friction',
+                                     friction_substrate=1.0,
+                                     friction_cell_cell=0.5,
+                                     adhesion=ad), steps))
+    print()
+    for gcc in (0.0, 5.0):
+        out.append(run(f"friction gamma_cc={gcc}, adhesion=5.0",
+                       square_regime(velocity_model='friction',
+                                     friction_substrate=1.0,
+                                     friction_cell_cell=gcc,
+                                     adhesion=5.0), steps))
+    print("\n  PASS requires: circularity rising toward 1.0, AND more adhesion")
+    print("  giving more rounding.")
+    return out
+
+
+if __name__ == '__main__' and 'friction' in sys.argv:
+    friction_test(int(sys.argv[1]) if sys.argv[1].isdigit() else 3000)
