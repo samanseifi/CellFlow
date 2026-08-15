@@ -682,6 +682,13 @@ Same shape, same sign structure, and k₀ — a *dimensionless* quantity, so dir
 comparable — agrees to ~4%. Amplitude is ~5× larger, consistent with an effective
 β between 1 and 4. **The linear theory is reproduced.**
 
+> **Corrected 2026-08-14.** The ~4% compared our λ_rel against their λ_abs; their
+> perturbation ansatz makes λ the growth rate of the *absolute* lobe depth. Like
+> for like the figure is **~15%** (measured λ_abs k₀ = 14.82 vs analytic 12.9),
+> and the effective-β estimate from amplitude does not survive either — see
+> "An amplitude-convention mismatch" below. The conclusion that the linear theory
+> is reproduced stands; the 4% does not.
+
 ## The two missing physics, measured
 
 With growth off, their relation collapses to λ = −(σ/R\*³)k(k²−1), so the decay
@@ -759,22 +766,722 @@ and damped rather than organised.
   estimate, not a measured surface tension. Measuring γ directly (boundary
   fluctuation spectrum) would put the scaling law on firmer ground.
 
+---
+
+# The β axis, and a nutrient field that was never at steady state (2026-08-14)
+
+Prompted by an outside recommendation that this study was never really in the
+transport-limited regime — that fingering needs a thin, flux-fed active rim and
+"an agent model at generous nutrient is automatically in the stable-disk region
+no matter what the mechanics do", with two proposed diagnostics: measure the
+growth-rate field g(r), and check the front speed against the flux budget.
+
+Both diagnostics were run. **Both pass, comfortably.** The premise is
+nevertheless correct, for a reason neither diagnostic detects.
+
+## First: "branching needs small β" versus "λ grows with β"
+
+The recommendation asserted branching needs *small* β, citing the paper's
+calibration (n_c ≈ 0.65 g/l branched vs ≈ 5.5 g/l compact). This document
+asserted the opposite, that larger β raises the amplification rate. **Both
+statements are in the paper, and both are true — they are about different
+things**, and conflating them is what sent this study after the wrong knob.
+
+- Sect. 4: *"the maximum amplification rate λ increases as β_i increases"*.
+- Sect. 5: *"small values of β_i promot[e] the formation of fingers of
+  decreasing thicknesses"*, because *"for high values of β₂, the characteristic
+  wavenumber of the perturbation is k = 1"*.
+
+`experiments/giverso_analytic.py beta` reconciles them. β multiplies both the
+amplification rate and the front velocity (their Eq. 14), so raising it speeds
+everything up together and by itself selects no shape — k_peak barely moves.
+What it changes is the **contrast between the finger band and k = 1**, the rigid
+translation, which carries no capillary penalty (the −σk(k²−1) term vanishes at
+k = 1) and so gains most from a larger β:
+
+| β | n_c (g/l) | λ(k=1) | peak λ | k_peak | λ(1)/λ(peak) |
+|---|---|---|---|---|---|
+| 0.5 | 0.65 | +0.00003 | +0.00109 | 8 | **0.03** |
+| 1.0 | 1.30 | +0.00010 | +0.00236 | 9 | 0.04 |
+| 4.25 | 5.53 | +0.00426 | +0.01145 | 9 | 0.37 |
+| 8.5 | 11.05 | +0.02054 | +0.02572 | 8 | 0.80 |
+| 15.0 | 19.50 | +0.06653 | +0.06324 | **2** | **1.05** |
+
+Past β ≈ 10 the translation outruns the whole band and the colony goes lopsided
+instead of branching. So "low nutrient branches" is **not** a claim about a
+stronger instability — it is a claim about *suppressing k = 1 relative to the
+finger band*. The two knobs separate cleanly, and they are not interchangeable:
+
+> **β sets λ(k=1)/λ(k_peak) — lopsided vs fingered.
+> σ sets k_peak — how many fingers.**
+
+Varying them at fixed β/σ confirms they do not collapse onto one group: at fixed
+β/σ = 143 the contrast still runs 0.025 → 1.056 as β goes 0.25 → 16, while
+raising σ at fixed β moves k_peak 10 → 2 and leaves the contrast under 0.2.
+
+*Root-selection fix.* Getting λ(k=1) at all required repairing the solver. For
+λ < 0 the Bessel arguments turn imaginary and the dispersion equation grows a
+dense set of spurious crossings — **45 of them at k=1, β=8.5** — among which the
+old "root nearest zero" rule is meaningless. For λ > 0 the arithmetic is real
+and there is **exactly one** root (verified over β = 0.5–15, k = 1–40), so
+`lam_of_k` now takes the positive root when one exists. All three published-figure
+sanity checks still pass, and β=15 now peaks at 0.063 against the paper's ~0.08
+axis, closer than the 0.053 the old selector gave.
+
+## An amplitude-convention mismatch, and a corrected claim
+
+Their perturbation is `R(θ,t) = R*(t) + ε e^(λt) cos(kθ)` — **λ is the growth
+rate of the absolute lobe depth**. Our harness reports `lambda_rel`, for
+δ_k/R. They differ by exactly d(lnR)/dt, which the harness has been recording
+(≈ 0.003) and which `lambda_abs` has been storing all along.
+
+The earlier claim that the marginal mode agrees *"to ~4%"* compared our λ_rel
+against their λ_abs curve. Like for like:
+
+| | k₀ |
+|---|---|
+| analytic, chemotactic β=1, σ=0.007, matched R\*=19.9, q=2.3 | 12.9 |
+| measured, λ_rel (what was quoted) | 13.45 → 4% |
+| **measured, λ_abs (the right comparison)** | **14.82 → 15%** |
+
+Same ballpark and same sign structure, so *"the linear theory is reproduced"*
+survives; **the "~4%" figure does not, and is corrected to ~15%.** Note also
+that at matched geometry their k_peak is 6 — an interior maximum — where we
+measure 3.
+
+## The g(r) diagnostic: every regime is deeply transport-limited
+
+`experiments/giverso_growthprofile.py` measures the growth localisation
+directly, rather than inferring it from `active_fraction` (a binary quiescence
+flag, not a rate). In CellFlow the growth law is exactly
+`dA_k/dt = (a_max/100)(uptake_k − basal_k)` for active cells, and division
+conserves area, so this is the discrete model's own Γ/ρ.
+
+| regime | w/R | w/ℓ | g_core/g_rim | T = v_budget/v_kinetic |
+|---|---|---|---|---|
+| stage1 | 0.100 | 1.12 | **0.000** | 0.113 |
+| prolif | 0.100 | 1.00 | **0.000** | 0.124 |
+| chemo | 0.050 | 1.06 | **0.000** | 0.062 |
+| proportional | 0.050 | 1.06 | **0.000** | 0.062 |
+| starved + Monod | 0.075 | 1.59 | **0.000** | 0.098 |
+
+The interior is not merely slow, it is **exactly arrested** — g_core/g_rim = 0
+to three decimals in every regime — the active layer is 5–10% of the colony
+radius, and the front advances at 6–12% of its kinetics-limited ceiling. On the
+proposed diagnostics this study was never in the kinetics-limited corner.
+
+One incidental result: the starved + Monod configuration is *less* sharply
+limited than the run it was meant to improve on (w/R 0.050 → 0.075, T 0.062 →
+0.098). With K_m = 25 against a reservoir of 40 the uptake response saturates,
+so nutrient penetrates further. A small half-saturation makes the growth
+response switch off *sharply*; it does not make the layer *thin*.
+
+## But the effective β is ≈ 7–10.5 — the compact corner
+
+Their Eq. (14) makes β measurable rather than fitted:
+γ_n = D/ℓ², v_c = D/ℓ, R\* = R/ℓ, n₀ = (nutrient at the front)/(reservoir), and
+β = (v_front/v_c)/(n₀ I₁(R\*)/I₀(R\*)).
+
+| regime | R\* | n₀ | **β_eff** |
+|---|---|---|---|
+| stage1 | 11.2 | 0.701 | 7.43 |
+| prolif | 10.0 | 0.689 | 6.79 |
+| chemo | 21.3 | 0.571 | 10.29 |
+| proportional | 21.3 | 0.576 | 10.47 |
+| starved + Monod | 21.3 | 0.536 | 8.55 |
+
+Their branched calibration is β ≈ 0.5–1; β ≈ 8.5 is their *compact* case
+(n_c ≈ 10 g/l, optimal growth). Two independent measurements agree: the
+front-speed budget gives β_eff ≈ 7–10.5, and the measured contrast
+λ(k=2)/λ(peak) = 0.82–1.00 across every sweep in this study maps, in their
+theory, to β ≳ 8.5–12. **We have been running the compact-colony corner
+throughout** — which is precisely the outside recommendation's conclusion.
+
+Note what the starvation run buys: cutting the reservoir 2.5× moved β_eff only
+10.47 → 8.55, an 18% change. The reservoir level is not the lever.
+
+*Caveat on the Eq. (14) route, which the next section forces.* Their derivation
+assumes an **incompressible** colony (dρ/dt = 0). Ours is not: over a sweep the
+radius grows 11.0% while the cell count grows 12.1%, a **9–10% density drop** in
+both the original and corrected regimes. Part of our front advance is therefore
+spreading rather than production, which Eq. (14) attributes to β. The contrast
+measurement λ(k=2)/λ(peak) does not depend on that assumption and is the more
+robust of the two.
+
+## The cause: the exterior nutrient field was never at steady state
+
+n₀ is the tell. The colony edge sits at **0.69 of the reservoir**, where the
+quasi-steady solution at the same R\* and q gives **0.057** — a factor of 12.
+Measured on the grid, the depletion shadow is gone by r = 1.2 R; the colony
+drains itself but not its surroundings.
+
+`equilibrate_nutrient` seeded the interior with an exponential profile and left
+**the entire exterior at the full reservoir value**. That is not the neutral
+starting point the docstring claims, because equilibrating the annulus from R
+out to the wall takes ~(L/2 − R₀)²/D ≈ 39,000 time units — about 780,000
+iterations, against the 625 the relaxation actually runs. The guess cannot
+relax, so it is *imposed*.
+
+Both existing guards pass on it. The convergence test is a tolerance on how much
+the field still moves: it reports converged at tol = 2e-4 and **fails to converge
+in 40,000 iterations at tol = 1e-6**. `active_fraction` reports a healthy 14%
+rim. Neither is sensitive to a slowly-filling exterior.
+
+`check_exterior_steady()` is the sufficient test, and needs no tolerance: outside
+the colony there are no sinks, so the radial flux Φ(r) = −2πrD ∂n/∂r must be
+**independent of r**. Measured as shipped it runs 1719 → 345 between r = 1.06 R
+and 1.68 R, a ratio of **5.0**.
+
+Seeding the paper's own quasi-stationary state instead (their Eq. 12 —
+exponential inward from n₀, logarithmic recovery outward), via
+`exterior_quasi_steady`:
+
+| | iters | ℓ | R\* | n at colony edge | flux ratio | steady? |
+|---|---|---|---|---|---|---|
+| as shipped | 625 | 8.4 | 21.2 | **0.659** | ∞ (5.0 measured) | **no** |
+| corrected | **25** | 7.9 | 22.6 | **0.046** | **1.00** | **yes** |
+| analytic target | | | 22.6 | 0.053 | 1.00 | — |
+
+The corrected field reaches a genuine fixed point in 25 iterations, carries an
+r-independent flux, and puts the interface within 13% of the analytic value.
+**Every dispersion sweep in this document ran with ~14× too much nutrient at the
+front.**
+
+That is the precise sense in which the outside critique was right. Not that the
+growth was insufficiently localised — it was fully localised — but that the
+colony was never allowed to draw down the medium it sits in, which pinned it in
+the large-β corner where the paper's own model predicts lopsided colonies rather
+than fingers. It is also a defect of a kind this document has hit before: a
+result resting on a measurement artefact that passed every guard in place at the
+time.
+
+## The corrected field does not change the answer
+
+`giverso_dispersion.py propfixed` re-runs the flux-proportional sweep on the
+equilibrated field, with the quiescence threshold rescaled to the same *fraction*
+of the interface value (30 → 1.4) so the active rim stays comparable (13% vs
+14%) and only the nutrient field changes. Three seeds per mode, all guards
+passing:
+
+| k | 2 | 3 | 5 | 7 | 10 | 14 | 20 |
+|---|---|---|---|---|---|---|---|
+| λ, corrected | +0.0069 | **+0.0079** | +0.0075 | +0.0058 | +0.0037 | +0.0007 | −0.0042 |
+| ± | 0.0003 | 0.0001 | 0.0004 | 0.0003 | 0.0002 | 0.0003 | 0.0003 |
+| λ, original | +0.0214 | +0.0235 | +0.0212 | +0.0164 | +0.0085 | −0.0014 | −0.0135 |
+
+| | original | corrected |
+|---|---|---|
+| interior peak | k\* = 3 | **k\* = 3** |
+| marginal mode k₀ | 13.45 | **14.83** |
+| λ(k=2)/λ(peak) | 0.91 | **0.87** |
+| peak λ | +0.0235 | +0.0079 |
+
+Draining the medium 14× makes the instability **three times weaker** — exactly
+what their theory says a smaller β does — while the *shape* barely moves: the
+same interior peak at k = 3, a marginally wider band, and a contrast that
+improves from 0.91 to 0.87 where their theory at β ≈ 0.5 gives ≈ 0.29.
+
+> **So the exterior-field defect was real, and fixing it does not produce
+> fingering.** The large-β diagnosis is numerically correct on their axis but
+> does not carry the causal weight there that it does in their continuum model:
+> a 14× cut in interface nutrient buys a 4% improvement in the quantity that
+> separates lopsided from fingered.
+
+It also breaks the second β estimate rather than confirming it. On the corrected
+field β_eff *rises* to 105 instead of falling, because n₀ drops 15× while the
+front slows only ~1.5× — the front keeps advancing on a medium that can no longer
+feed it, by spreading. That is the 9–10% density drop noted above, and it
+directly violates the `dρ/dt = 0` on which Eq. (14) rests. **The Eq. (14) route
+to β is not valid for this model**; the contrast measurement stands.
+
+The correction is worth keeping regardless — `exterior_quasi_steady` and
+`check_exterior_steady` make the nutrient field defensible, and every sweep in
+this document was run on a transient — but it does not move the conclusion.
+
+## Starvation to the freezing point: no branching, and roughness goes the wrong way
+
+`experiments/giverso_starvation_limit.py`. The genuine axis — `bc_value` down
+with the quiescence threshold held **fixed** at 1.4 — on the corrected nutrient
+field, walked past the point where the rim dies rather than stopping at a chosen
+value. This supersedes both earlier starvation attempts: the first scaled bc and
+the threshold together (a pure rate change), and the second ran on the
+un-equilibrated exterior, where `bc_value` was not controlling the interface
+nutrient at all.
+
+1200 steps, free growth, no seeded mode:
+
+| n_bc | active rim | R | cells | roughness | δ/ℓ |
+|---|---|---|---|---|---|
+| 100 | 22% | 177→191 | 6970→7154 | 0.0125→**0.0168** | 0.40 |
+| 55 | 14% | 177→190 | 6970→7056 | 0.0125→0.0143 | 0.34 |
+| 40 | 10% | 177→189 | 6970→7025 | 0.0125→0.0141 | 0.34 |
+| 30 | 5% | 177→189 | 6970→7004 | 0.0125→0.0144 | 0.35 |
+| 24 | 1% | 177→189 | 6970→6978 | 0.0125→0.0140 | 0.34 |
+| **21** | **0%** | 177→189 | 6970→6970 | 0.0125→**0.0132** | 0.32 | **FROZEN** |
+
+The starvation axis works exactly as intended — the active rim thins
+monotonically 22% → 0% and the freeze is located at n_bc = 21 — and the front
+gets **smoother**, not rougher: 0.0168 at full nutrient down to 0.0132 at the
+last living colony. δ/ℓ never exceeds 0.40 against the ≈2 that every amplifying
+seeded mode in this study required.
+
+The flux-blind control settles it. Excess of the flux-responsive law over the
+flux-blind one at matched force, across the whole ladder:
+
+| n_bc | 100 | 70 | 55 | 45 | 40 | 36 | 33 | 30 | 27 | 24 | 21 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| excess | 0.91 | 0.81 | 1.00 | 0.95 | 0.99 | 1.00 | 0.99 | 1.01 | 0.95 | 0.97 | 1.01 |
+
+**≤ 1 at every nutrient level down to the freeze.** The flux response contributes
+nothing the flux-blind law does not, at any degree of starvation.
+
+This is what the dispersion relation predicts and it is worth stating as the
+general result rather than one more null: β multiplies the whole driving side, so
+starvation scales λ(k) down without changing its k-dependence. A weaker copy of
+the same shape is still peaked at the lowest mode. **Starving the colony cannot
+manufacture the +k structure that fingering requires** — measured now at eleven
+nutrient levels, including the last one at which the colony is alive.
+
+---
+
+# What the ABM literature says we are missing (2026-08-15)
+
+Van Liedekerke, Palm, Jagiella & Drasdo, *"Simulating tissue mechanics with
+agent-based models"*, Comp. Part. Mech. 2:401–444 (2015)
+(`paper/1-s2.0-S2196438625008319-main.pdf`) is a review of exactly our model
+class — center-based models (CBM) — by the group that has used them longest. It
+does not discuss fingering, but three of its stated CBM limitations are, almost
+verbatim, the things this study has spent months measuring. That is worth
+recording: the σ ≈ 0 result and the density drop are not CellFlow bugs, they are
+**known structural limits of pairwise center-based models**, with published
+remedies.
+
+## 1. Our contact law has almost no cohesive well — which *is* σ ≈ 0
+
+Their §3.1.1 distinguishes the "extended Hertz" adhesion `F_adh = −πσR̂` from
+proper **JKR**, noting the simple form *"neglects that adhesion is modifying the
+contact area, and disregards that the force distribution within the contact area
+is inhomogeneous"*, and that JKR *"also takes into account a hysteresis effect if
+the cells are separated from each other"* (their Eqs. 33–34).
+
+Ours is weaker than either. From [`cellflow/kernels/forces.py`](cellflow/kernels/forces.py):
+
+| | our law | Hertz/JKR |
+|---|---|---|
+| repulsion | `k_rep · exp(3δ/d)` — **jumps to k_rep = 35 at zero overlap** | `∝ δ^{3/2}`, → 0 at contact |
+| adhesion | linear spring, only for `d < r < 1.5d` | modifies the contact area, holds a neck under tension |
+| hysteresis | none | JKR has it |
+
+At stage-1 parameters the adhesive well is **1.44 deep against a contact
+repulsion of 35 — a factor of 24.** Surface tension is the work of adhesion per
+unit contact area, so a pair potential with a well that shallow *cannot* produce
+one. The measured σ ≤ 0.0043 is not a mystery to be explained; it is the direct
+arithmetic of this force law. The discontinuity at contact is the second problem:
+there is no smooth cohesive minimum for a curvature-restoring force to come from.
+
+**This makes route 1 in "Where this leaves the effort" concrete: replace the
+force law with JKR (their Eqs. 33–34), including the separation hysteresis.** The
+review notes an effect of the adhesion-model choice on monolayer dynamics has
+already been reported in the literature.
+
+## 2. The density drop is the textbook CBM failure, and it has a published fix
+
+Their §3.1.2, in language that could have been written about our result:
+
+> *"A drawback in CBM based upon pair-wise forces is that the contact forces and
+> contact area become largely inaccurate when cells become densely packed."*
+
+The reason is that volume conservation is a **multibody** constraint. For an
+incompressible cell the Voronoi volume must stay at V₀ no matter how the
+neighbours press in, and *"even for the setting ν = 0.5 in the Hertz (or JKR)
+force models, the cell–cell distances … could become so small, that the volume
+that can be associated with the central cell … would become smaller than V₀."*
+They add that in dense packing the Hertz/JKR contact area itself stops being a
+good estimate, because neighbour-neighbour contacts overlap, and that these laws
+*"emerge from linear elasticity assuming small deformations which in dense
+packings of cells can easily be violated."*
+
+Our colony dilutes **9–10% over a sweep** where Giverso's is incompressible by
+construction. That is this failure, measured.
+
+Their remedy: estimate cell volume from a **modified Voronoi tessellation with a
+cutoff radius** (the cutoff is what lets an isolated or detached cell still have
+a defined shape — a pure Voronoi cell has none, which matters for us because rim
+cells detach), then add an explicit volume force, their Eq. 42:
+
+```
+F_vol_ij = [ E_i/(3(1−2ν_i)) · log(V_i/V⁰_i) + E_j/(3(1−2ν_j)) · log(V_j/V⁰_j) ] · A_ij · (r_i−r_j)/|r_i−r_j|
+```
+
+with the stated caveat that Hertz/JKR already contains a compression part, so
+naively adding this double-counts.
+
+**This reframes `_resolve_overlaps`.** Our geometric overlap projection is an
+ad-hoc stand-in for exactly this multibody volume constraint — and the codebase
+already knows it is destructive: *"at 1.0 the projection overrides the force
+balance and the tissue has no surface tension at any adhesion strength (issue
+#31)"*. The review says what it should be replaced by rather than tuned.
+
+*Tested and not supported:* that the projection is also the source of the
+unexplained linear-in-k damping. Fitting λ = λ₀ − ck across the 2×2 gives
+c = 0.00169 (overlap 2) vs 0.00227 (overlap 1) with the source off, but 0.00191
+vs 0.00075 with it on — no consistent trend. The origin of the linear-in-k term
+remains open.
+
+## 3. Fingering HAS been produced in a center-based model — by a different mechanism
+
+> *"Sepulveda et al. considered a CBM in which cells move in a stochastic manner
+> and try to adapt their motion to that of their neighbors. Introducing **leader
+> cells**, they found that **fingers develop** as observed in experiments when
+> leader cells more actively invade free environment than following cells and
+> regulate their motion according to their contacts with following cells."*
+
+Sepúlveda, Petitjean, Cochet, Grasland-Mongrain, Silberzan & Hakim, *PLoS Comput
+Biol* **9**(3):e1002944 (2013).
+
+This is the single most useful pointer in the review. It is fingering, in a
+center-based model, in 2D, against a free edge — and it is **not**
+Mullins–Sekerka. The mechanism is collective motility: velocity alignment between
+neighbours plus a distinguished leader population. It needs no capillary term, no
+nutrient gradient, and no incompressibility, i.e. none of the three things we
+have established this model lacks.
+
+That makes it the natural companion to the Farrell mechanical route already noted
+in the back pocket, and it is directly implementable here: CellFlow already has
+per-cell polarity, heritable phenotype (used for clonal sectors), and a
+propulsion kernel. What is missing is a **velocity-alignment term** between
+neighbours and a leader/follower distinction.
+
+**Caveat on scope.** This would reproduce *epithelial* fingering, not Giverso's
+diffusion-limited branching. It is a different physical question with a different
+target dataset. Worth being explicit about that rather than quietly changing what
+"success" means.
+
+---
+
+# WHY IT CANNOT FINGER: the whole dispersion relation is proportional to the growth rate (2026-08-15)
+
+The linear-in-k damping has been the outstanding unexplained term since the
+dispersion work began — it is what pins the most unstable mode at k = 2–3 instead
+of the 10–30 branching needs. It is now identified, and the answer subsumes every
+null result in this document.
+
+## The measurement
+
+`giverso_dispersion.py growthrate` varies **only the expansion rate**. Basal
+metabolism subtracts from a cell's stored nutrient *after* uptake, so it slows net
+area production while leaving uptake — and therefore the nutrient field, ℓ, and
+the entire spatial structure — untouched. It is the only knob in the model that
+moves the front speed alone. Two seeds per mode, ℓ = 9.0 in all three:
+
+| basal | d(lnR)/dt | λ₀ | c | **c / (dlnR/dt)** | **λ₀ / (dlnR/dt)** |
+|---|---|---|---|---|---|
+| 0.00 | 0.00276 | +0.0276 | 0.00165 | **0.596** | **10.0** |
+| 0.06 | 0.00269 | +0.0273 | 0.00160 | **0.596** | 10.1 |
+| 0.12 | 0.00261 | +0.0269 | 0.00154 | **0.592** | 10.3 |
+
+Both coefficients track the expansion rate, with the ratios constant to **0.7%**
+(Pearson r = +0.998). Supporting evidence at wider range: across all 12 sweeps in
+this study c correlates with d(lnR)/dt at r = +0.62, and in the surface-tension
+run — growth switched **off** — λ(k) has *no k-dependence whatsoever*.
+
+*Caveat:* the basal lever moves the expansion rate only 6%, so this is a tight
+local test rather than a wide-range one, and with the proportional law the k=3
+interior peak makes the linear fit approximate (r² ≈ 0.86). The wide-range
+support is the 12-sweep correlation and the growth-off null.
+
+## What it means
+
+The dispersion relation is not two competing physical effects. It is **one
+number times a fixed function of k**:
+
+> **λ(k) ≈ (Ṙ/R) · [ 10 − 0.6 k ]**
+
+Every term scales with the growth rate. Therefore the marginal mode
+
+> **k₀ = λ₀/c ≈ 16.7 — a pure number, independent of how fast the colony grows.**
+
+Compare Mullins–Sekerka, λ(k) = V·k − Γ·k³. There the front velocity V multiplies
+**only the destabilizing term**; the capillary coefficient Γ is a *material
+property* that does not care how fast the front moves. That asymmetry is the
+entire mechanism of wavelength selection: k\* = √(V/3Γ) shifts with growth rate
+precisely *because* the two terms scale differently.
+
+**Our model has no growth-rate-independent term at all.** Surface tension is
+supposed to be it — and we measured why it is missing, arithmetically: an
+adhesive well of 1.44 against a contact repulsion of 35. With σ ≈ 0 the only
+k-dependent stabiliser left is itself proportional to expansion, so the ratio
+λ₀/c is frozen and no growth-side knob can move it.
+
+## This explains every null result in this document
+
+| observation | explanation |
+|---|---|
+| starvation to the freezing point changed nothing but the amplitude | it changes only the prefactor Ṙ/R |
+| the corrected nutrient field gave λ 3× smaller, same peak at k=3 | same — prefactor only |
+| bigger colonies widened the band but never created selection | k₀ = λ₀/c is a pure number |
+| the Darcy growth source *stabilised* the front | it feeds the expansion channel, i.e. the prefactor |
+| E ≈ 1.7 (a strong local flux driver) yet no instability | E is local; the net k-coefficient is what matters, and it is negative |
+| proportional chemotaxis was the only thing that ever helped | it adds a genuine flux-fed +k channel that partly offsets the expansion-generated −ck |
+
+And it says plainly why the intuition "weak surface tension should give fingers"
+fails here. Weak σ does not liberate the instability; it **removes the only term
+that could have made the dispersion relation depend on anything but growth rate.**
+
+## The prediction, and the test that would confirm it
+
+Add a real capillary term — a growth-rate-independent, curvature-dependent
+restoring force (JKR contact with hysteresis, per Van Liedekerke et al.
+Eqs. 33–34) — and λ(k) should stop being proportional to Ṙ/R. Specifically:
+
+- λ₀/c should **stop being constant** and start moving with the growth rate,
+- k\* should scale as √(V/Γ), i.e. **faster growth should select more fingers**,
+- rerunning this exact growth-rate series is then the confirmation: today the
+  ratio is flat to 0.7%; with a working capillary term it must not be.
+
+That makes the JKR work a falsifiable experiment rather than an open-ended
+rewrite, and this series is its control.
+
+---
+
+# The square test: the surface tension is not weak, it is ABSENT (2026-08-15)
+
+`experiments/giverso_square_relax.py`. A square is a sharper probe than the 4:1
+rectangle used earlier: aspect ratio cannot tell a square from a disc (both 1.0),
+but a square has exactly the structure capillarity acts on — **flat edges (zero
+curvature) and sharp corners (high curvature)**. A surface tension must eat the
+corners and leave the edges. Nothing else in the model has any reason to.
+
+No biology at all: uptake, growth, division, death, chemotaxis and the random
+walk are off. Only adhesion, steric repulsion and the overlap projection act.
+Measured by convex-hull circularity `4πA/P²` (0.785 square, 1.000 disc) and by
+a₄, the four-fold boundary mode — the corners themselves. 3000 steps, 1759 cells:
+
+| configuration | circularity | a₄ |
+|---|---|---|
+| default mechanics | 0.8034 → **0.8015** | 0.1685 → 0.1612 (0.96×) |
+| overlap_iterations = 0 | 0.8034 → 0.8021 | 0.1685 → 0.1681 (1.00×) |
+| overlap_iterations = 2 | 0.8034 → 0.8018 | 0.1685 → 0.1592 (0.94×) |
+| + random walk 0.02 | 0.8034 → 0.8015 | 0.1685 → 0.1626 (0.96×) |
+| + random walk 0.05 | 0.8034 → 0.8015 | 0.1685 → 0.1659 (0.98×) |
+| **adhesion = 0** | 0.8034 → 0.8015 | 0.1685 → **0.1589 (0.94×)** |
+| adhesion = 10 | 0.8034 → 0.8015 | 0.1685 → 0.1611 (0.96×) |
+| **adhesion = 50 (100×)** | 0.8034 → 0.8014 | 0.1685 → **0.1560 (0.93×)** |
+| uncompressed, adhesion 0.5 | 0.7966 → 0.7967 | 0.1703 → 0.1633 (0.96×) |
+| uncompressed, adhesion 50 | 0.7966 → 0.7950 | 0.1703 → 0.1637 (0.96×) |
+
+**The square does not round. Circularity does not move at all** — it drifts by
+±0.002 in 3000 steps, and in the primary case *away* from a disc. The corners
+lose at most 7% of their amplitude, in a run long enough for a liquid drop to
+have relaxed completely.
+
+## The decisive line is adhesion = 0
+
+> **Turning adhesion completely OFF (a₄ 0.94×) is indistinguishable from running
+> it at 100× the default (0.93×).** The shape dynamics of this tissue does not
+> depend on the adhesion strength at all.
+
+That kills the premise the whole surface-tension discussion rested on. There is
+no *weak* emergent surface tension to be strengthened by tuning adhesion —
+adhesion is not in the shape equation. The earlier bound "σ ≤ 0.0043" was
+generous: the correct statement is that the mechanism is absent, not small.
+
+## Why: the force balance, measured
+
+On the initial pack, mean force magnitudes per cell:
+
+| | mean | max |
+|---|---|---|
+| repulsion | **56.3** | 121.7 |
+| adhesion at default (0.5) | **0.11** | 0.60 |
+| adhesion at 50 | 11.3 | 60.0 |
+
+**A factor of 500 at default, and still 5× at a hundred times the default.**
+This is the force law from the earlier analysis, now shown dynamically: repulsion
+acts only below the touching distance and *jumps discontinuously to 35 there*,
+while adhesion acts only above it and is a weak linear spring. Cells therefore
+sit pinned at contact, on the repulsive side of a discontinuity, and never
+meaningfully sample the adhesive branch. The block is a **cohesionless granular
+solid** — held in shape by a contact network, with no capillary driving force to
+minimise its perimeter.
+
+Two further reads:
+
+- **Not a jamming artefact.** Motility does not help. Strictly this control is
+  weak (propulsive forces of 1–5 against a repulsive scale of 56), but the
+  adhesion = 0 result makes it secondary: jamming can only resist a driving
+  force, and there is no driving force to resist.
+- **Not an initial-compression artefact either.** The usual 1.9 packing starts
+  every pair 5% overlapped; starting exactly at contact instead (spacing 2.0)
+  rounds *less*, not more.
+
+## Correction: there IS a cohesive well, and the disc IS the lower state
+
+The claim above that "adhesion is not in the shape equation" was too strong, and
+the energy accounting corrects it. Integrating the force law gives a genuine pair
+potential with a minimum at contact:
+
+| adhesion | bond well depth | barrier to squeeze a pair to 10% overlap | barrier/well |
+|---|---|---|---|
+| 0.5 (default) | **−0.746** | 17.6 | 23.6 |
+| 10 | −14.93 | 17.6 | 1.2 |
+| 50 | −74.65 | 17.6 | 0.2 |
+
+And a disc genuinely is the lower state: at matched packing and jitter it has
+**+13 more bonds** than a square of the same 1602 cells. So a driving force
+exists. The reason it never acts is two separate failures, both quantitative.
+
+**1. The driving force is vanishingly small.** +13 bonds out of 4646 is
+0.28%. At default adhesion the entire square→disc gain is ΔU ≈ −10 — *less than
+the barrier for a single cell rearrangement* (17.6), and 20× below the ±740
+run-to-run scatter that packing disorder alone contributes. The shape signal is
+beneath the noise floor of the pack.
+
+**2. The motion it would need is hydrodynamically forbidden.** This is the part
+that was invisible until measured. Cell velocities do not come from F/γ; they
+come from the Brinkman solver, whose transfer function is stated in its own
+docstring:
+
+```
+u_hat(k) = P(k) f_hat(k) / (mu |k|^2 + alpha),    alpha = mu / delta^2
+```
+
+That is a **low-pass filter on force**. At μ = 500 and δ = 14:
+
+| feature | wavelength | suppression vs k→0 |
+|---|---|---|
+| cell-scale rearrangement | 4.3 | **416×** |
+| corner of the square (~3 cells) | 13.0 | **47×** |
+| colony mode m = 3 | 371 | 1.1× |
+
+Rounding a corner is a cell-scale rearrangement. It is exactly what the filter
+removes. Measured directly: applying a random propulsive force of **150 per cell**
+(3× the mean repulsive force) changes the mean displacement over 500 steps from
+3.154 to **3.159** — i.e. not at all. The "motility" controls in the table above
+were not merely weak, they were **inert**, and the same is true of the
+`trapped_test` sweep up to force 150.
+
+So: a real but negligible driving force, acting through a channel with ~400×
+attenuation at the only wavelength where it matters.
+
+## Refuted: the marginal mode is NOT the screening length
+
+The filter cutoff sits at k = 1/δ, i.e. colony mode m = R/δ = 177/14 = 12.6,
+against a measured marginal mode of 13.45. That near-match suggested the
+long-unexplained linear-in-k damping was simply the hydrodynamic coupling.
+`giverso_dispersion.py screening` tests it by varying δ at fixed R:
+
+| δ | R/δ | k₀ measured | peak λ | c |
+|---|---|---|---|---|
+| 7 | 25.3 | 11.19 | +0.0117 | 0.00152 |
+| 14 | 12.7 | 13.81 | +0.0237 | 0.00208 |
+| 28 | 6.3 | 14.72 | +0.0603 | 0.00422 |
+
+**R/δ moves 4× and k₀ barely moves — and in the opposite direction.** The
+hypothesis is refuted by its own test; the 12.6/13.45 agreement was coincidence.
+
+What the sweep does show is the now-familiar pattern: λ₀ and c both rise with δ
+(0.0117→0.0603 and 0.00152→0.00422) while their ratio, and the peak at k = 3,
+stay put. **Drag is another prefactor.** That is the fourth independent knob —
+after nutrient level, growth rate and colony size — to change the rate and leave
+the shape alone. Only the propulsion response law has ever changed the shape.
+
+The origin of the linear-in-k damping therefore remains open.
+
+## The screening length is exonerated: it is the formulation, not the parameter
+
+δ = 14 is ~6.5 cell radii, where the physical screening in a dense pack should be
+the pore scale, δ ~ one cell. That would cut the cell-scale suppression from 416×
+to 11× — a one-value fix, if it were the problem. `giverso_square_relax.py
+screening` tests it:
+
+| δ | cell radii | cell-scale suppression | a₄ (adh 0.5) | a₄ (adh 50) |
+|---|---|---|---|---|
+| 2.16 | 1.0 | **10.9×** | 0.94× | 0.94× |
+| 7.0 | 3.2 | 104.7× | 0.96× | 0.95× |
+| 14.0 | 6.5 | 415.6× | 0.96× | 0.93× |
+
+**A 38× change in cell-scale damping changes nothing.** Circularity stays flat in
+every case. So the attenuation is not what blocks rounding, and the parameter is
+cleared.
+
+What remains is the formulation itself. `v_cell = u_fluid(x_cell)` advects every
+cell by one smooth field, so two neighbours cannot acquire relative velocity at
+the cell scale **at any δ** — they can never exchange places. Neighbour exchange
+(T1) is what makes real tissue behave as a liquid and round up, and it is the one
+motion this velocity law cannot express.
+
+That also fixes the ordering of the remaining work. Three constraints were
+candidates; two are now excluded by measurement:
+
+| candidate | test | verdict |
+|---|---|---|
+| cohesion too weak | adhesion 0.5 vs 50 | **not binding** — no difference |
+| over-damped at cell scale | δ 2.16 vs 14 | **not binding** — no difference |
+| velocity law forbids relative motion | — | **the remaining constraint** |
+
+So the local friction law (the CBM standard: γ_sub·vᵢ + Σⱼ γ_cc(vᵢ−vⱼ) = Fᵢ,
+sparse symmetric, CG) comes **before** JKR, not after. A deeper adhesive well
+cannot express itself through a velocity law that forbids the motion it would
+drive — which is exactly what adhesion 0.5 vs 50 already demonstrates.
+
+## What this settles
+
+This is the direct, mechanical confirmation of the growth-rate result above.
+That analysis concluded the model has **no growth-rate-independent term**, and
+that surface tension was supposed to be it. This test shows why there is none:
+the term is not merely small, it is not coupled to adhesion at all. Both point at
+the same fix and make it non-optional — a contact law with a genuine cohesive
+well (JKR, Van Liedekerke et al. Eqs. 33–34), replacing rather than tuning what
+is there.
+
+**It also gives that work a trivial acceptance test.** Before attempting anything
+about fingering: *a square must become a disc, and it must do so faster with
+stronger adhesion.* Today it fails both halves.
+
 ## Where this leaves the effort
 
-Not reproduced, and now with a quantitative reason rather than a null result. Three
-routes remain, in order of expected value:
+Not reproduced, and now with a quantitative reason rather than a null result.
 
-1. **Test the scaling law.** Run a colony ~4x larger in radius and check k\*
-   moves as √(R/d₀) predicts. This is the cheapest decisive test of the whole
-   picture, and if it holds it is a publishable statement about the limits of
-   soft-particle ABMs. Note d₀ is regime-dependent (3a swelling, 8a
-   proliferating), so calibrate d₀ in the same regime before predicting k\*.
-2. **Lower d₀ below the cell scale** with genuinely different contact physics —
-   anisotropic, non-re-rounding rim contacts, or friction/adhesion hysteresis so
-   separated cells do not snap back. The overlap-sweep control shows d₀ *does*
-   respond to contact handling (2.8 → 2.1 for one fewer sweep).
-3. **Change model class** — sparse stochastic walkers (Ben-Jacob), where noise and
-   instability share a scale, or a sharp-interface/phase-field front.
+**The nutrient regime is now closed as an explanation** (2026-08-14). It was the
+last live "we simply had the physics set up wrong" hypothesis, and it has been
+tested three ways: growth localisation is total (g_core/g_rim = 0.000 in every
+regime), the front runs at 6–12% of its kinetic ceiling, and correcting a genuine
+14× error in the interface nutrient leaves the dispersion shape unchanged. Low
+nutrient makes the instability weaker, not more selective.
+
+What remains is what the surface-tension measurement identified: **σ ≲ 0.0043,
+below the smallest value in the paper's own figure, and no capillary −k³ term at
+all.** In their theory σ is the knob that sets k_peak and β the one that sets the
+lopsided-versus-fingered contrast; we have measured that our σ is effectively
+absent and that our β responds only weakly. Three routes remain, in order of
+expected value:
+
+1. **Replace the velocity law with local friction.** `γ_sub·vᵢ + Σⱼ γ_cc(vᵢ−vⱼ)
+   = Fᵢ` — sparse, symmetric, CG-solved, the CBM standard per Van Liedekerke
+   et al. Keep the Brinkman/IBM path as a selectable option; it is correct for
+   suspensions and bioreactors and is one of CellFlow's genuine strengths. This
+   is first because it is the only candidate constraint not yet excluded by
+   measurement: adhesion 0.5→50 and δ 14→2.16 both changed nothing, leaving
+   `v_cell = u_fluid` as the thing that forbids neighbour exchange.
+   **Gate: a square must become a disc, and faster with stronger adhesion.**
+2. **Then JKR** (Eqs. 33–34) with separation hysteresis, retiring the geometric
+   overlap projection (issue #31). Second, not first: a deeper adhesive well
+   cannot act through a velocity law that forbids the motion it would drive, and
+   the adhesion 0.5-vs-50 null already demonstrates that.
+3. **Then re-run the growth-rate series.** It is the falsifiable test of the
+   whole picture: with a working capillary term λ₀/c must *stop* being constant
+   and start moving with the growth rate, and k\* ~ √(V/Γ) so faster growth
+   selects more fingers. Today the ratio is flat to 0.7%.
+4. **Volume constraint** — modified Voronoi with cutoff radius plus their Eq. 42,
+   for the 9–10% density drop.
+5. **Optional, different target: the Sepúlveda route** — neighbour velocity
+   alignment + leader cells, the one published case of fingering in this model
+   class. It needs none of the physics we lack, but it targets *epithelial*
+   fingering, not diffusion-limited branching.
+
+Superseded: "test the √(R/d₀) scaling law" is retired — the law was replaced by
+k₀ ∝ R/√(aℓ), and band width was shown not to be what is missing.
 
 ## Reproduce
 ```bash
@@ -790,4 +1497,11 @@ python experiments/giverso_dispersion.py stage1     # lambda(k), current physics
 python experiments/giverso_dispersion.py stage3     # lambda(k), + growth-driven Darcy expansion
 python experiments/giverso_dispersion.py compare    # overlay, with marginal modes marked
 python experiments/giverso_branching.py volumetric   # colony morphology
+
+# The beta axis and the nutrient-field audit (2026-08-14)
+python experiments/giverso_analytic.py beta         # why small beta branches; our sweeps placed on it
+python experiments/giverso_growthprofile.py         # g(r), active-layer width, flux budget, beta_eff
+python experiments/giverso_dispersion.py probe propfixed   # exterior actually at steady state
+python experiments/giverso_dispersion.py propfixed         # lambda(k) on a correctly-drained field
+python experiments/giverso_starvation_limit.py            # bc down to the freeze; roughness FALLS
 ```

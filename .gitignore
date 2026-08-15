@@ -41,3 +41,6 @@ ENV/
 .venv/
 # Editor
 .vscode/
+
+# WSL/Windows download metadata
+*:Zone.Identifier
