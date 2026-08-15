@@ -29,6 +29,8 @@ from .kernels.neighbors import (
     differential_adhesion_celllist_numba,
     resolve_overlaps_celllist_numba,
 )
+from .kernels.friction import solve_friction_velocities
+from .kernels.jkr import jkr_forces_celllist_numba
 from .kernels.stokeslet import (
     update_fluid_velocity_numba,
     update_fluid_velocity_with_dipoles_numba,
@@ -124,7 +126,12 @@ class CellSimulation:
 
         # Overlap-resolution sweeps per step. More sweeps relax dense/just-divided
         # packings faster, reducing transient overlaps after division (issue #21).
-        self.overlap_iterations = int(config.get('overlap_iterations', 3))
+        # JKR carries its own repulsion continuously, so the geometric overlap
+        # projection is both unnecessary and harmful there -- issue #31 records
+        # that it overrides the force balance and destroys cohesion. Default it
+        # off under JKR; an explicit config value still wins.
+        _ovl_default = 0 if config.get('contact_model', 'legacy') == 'jkr' else 3
+        self.overlap_iterations = int(config.get('overlap_iterations', _ovl_default))
 
         # Fraction of each overlap removed per sweep. At 1.0 (default, and the
         # historical behaviour) the projection places cells at exactly touching
@@ -203,6 +210,53 @@ class CellSimulation:
 
         self.hydrodynamics_model = config.get('hydrodynamics_model', 'monopole')
         print(f"INFO: Using '{self.hydrodynamics_model}' model for hydrodynamics.")
+
+        # Cell velocity law (issue #32). 'fluid' (default, unchanged) takes each
+        # cell's velocity from the solved flow field. 'friction' instead solves
+        # the center-based-model relation
+        #     gamma_sub v_i + sum_j gamma_cc w_ij (v_i - v_j) = F_i
+        # locally, which is the standard in the CBM literature and -- unlike the
+        # fluid path -- PERMITS NEIGHBOUR EXCHANGE. Under 'fluid' every cell is
+        # advected by one smooth field, so two neighbours cannot acquire relative
+        # velocity at the cell scale and can never swap places; measured, a
+        # per-cell random force of 150 produced the same displacement as none at
+        # all. See cellflow/kernels/friction.py and docs/giverso_replication.md.
+        #
+        # The fluid path is NOT deprecated: it is the right model for cells in
+        # suspension, where momentum really does travel through the medium. This
+        # is about matching the model to the regime.
+        # Contact law (issue #33). 'legacy' keeps the original exponential
+        # repulsion plus linear adhesive spring; 'jkr' uses Johnson-Kendall-
+        # Roberts adhesive contact, which is continuous, has a genuine cohesive
+        # well, and holds an adhesive neck out to negative overlap. JKR also
+        # makes the overlap projection unnecessary -- and harmful, since it
+        # overrides the force balance (issue #31) -- so it is disabled by default
+        # when JKR is on.
+        self.contact_model = config.get('contact_model', 'legacy')
+        if self.contact_model not in ('legacy', 'jkr'):
+            raise ValueError("contact_model must be 'legacy' or 'jkr', "
+                             f"got {self.contact_model!r}")
+        self.jkr_modulus = float(config.get('jkr_modulus', 100.0))
+        self.jkr_work_adhesion = float(config.get('jkr_work_adhesion', 1.0))
+        if self.contact_model == 'jkr':
+            print(f"INFO: Contact model = JKR "
+                  f"(E* = {self.jkr_modulus:.3g}, "
+                  f"work of adhesion = {self.jkr_work_adhesion:.3g}).")
+
+        self.velocity_model = config.get('velocity_model', 'fluid')
+        if self.velocity_model not in ('fluid', 'friction'):
+            raise ValueError("velocity_model must be 'fluid' or 'friction', "
+                             f"got {self.velocity_model!r}")
+        self.friction_substrate = float(config.get('friction_substrate', 1.0))
+        self.friction_cell_cell = float(config.get('friction_cell_cell', 0.0))
+        self.friction_cutoff_factor = float(config.get('friction_cutoff_factor', 1.0))
+        self.friction_tol = float(config.get('friction_tol', 1e-8))
+        self._friction_iters = 0
+        self._friction_residual = 0.0
+        if self.velocity_model == 'friction':
+            print(f"INFO: Velocity law = local friction "
+                  f"(gamma_sub = {self.friction_substrate:.3g}, "
+                  f"gamma_cc = {self.friction_cell_cell:.3g}).")
 
         # Mechanotransduction (issue #17): cells sense the local fluid strain
         # rate and align their polarity (nematically) toward the principal
@@ -391,7 +445,21 @@ class CellSimulation:
             noise, self.propulsion_proportional
         )
 
-        if self.use_neighbor_list and len(radii) > 0:
+        if self.contact_model == 'jkr' and len(radii) > 0:
+            # JKR (issue #33) replaces the repulsion+adhesion pair entirely: one
+            # law carries both branches, continuously, with a real cohesive well
+            # and an adhesive neck that survives to negative overlap. The legacy
+            # law had repulsion jump to k_rep at zero overlap against an adhesive
+            # spring 500x weaker, which is why no adhesion strength produced a
+            # surface tension.
+            bin_size = 2.0 * radii.max() * 1.5
+            order, bin_start, nbx = build_cell_list_numba(
+                cell_positions, self.physical_size, bin_size)
+            repulsion_forces = jkr_forces_celllist_numba(
+                cell_positions, radii, self.jkr_modulus, self.jkr_work_adhesion,
+                order, bin_start, nbx, bin_size)
+            adhesion_forces = np.zeros_like(repulsion_forces)
+        elif self.use_neighbor_list and len(radii) > 0:
             # Bin size must cover the largest interaction range: the adhesion
             # band (touch * cutoff_factor) for the largest pair, which also
             # covers the shorter repulsion (touch) range.
@@ -713,7 +781,26 @@ class CellSimulation:
         #    Self-mobility uses Stokes drag; interactions use 2D Stokeslet.
         #    (Brinkman/IBM cell velocities were interpolated from the fluid in
         #    step 3 — reuse them so cells move with the field they advect.)
-        if precomputed_cell_velocities is not None:
+        if self.velocity_model == 'friction':
+            # Local friction law (issue #32): each cell's velocity responds to
+            # its OWN force, so neighbours can move relative to one another. The
+            # fluid field is still solved above and still advects the scalar
+            # fields -- only the CELL velocities come from here.
+            bin_size = 2.0 * radii.max() * max(self.friction_cutoff_factor, 1.0)
+            f_order, f_start, f_nbx = build_cell_list_numba(
+                cell_positions, self.physical_size, bin_size)
+            v_prev = np.array([c.velocity for c in self.cells])
+            cell_velocities, f_info = solve_friction_velocities(
+                cell_positions, radii, total_forces,
+                self.friction_substrate, self.friction_cell_cell,
+                cutoff_factor=self.friction_cutoff_factor,
+                tol=self.friction_tol,
+                cell_list=(f_order, f_start, f_nbx, bin_size),
+                v0=v_prev if v_prev.shape == total_forces.shape else None,
+            )
+            self._friction_iters = f_info['iterations']
+            self._friction_residual = f_info['residual']
+        elif precomputed_cell_velocities is not None:
             cell_velocities = precomputed_cell_velocities
         else:
             cell_velocities = compute_cell_velocities_numba(
