@@ -30,7 +30,7 @@ from .kernels.neighbors import (
     resolve_overlaps_celllist_numba,
 )
 from .kernels.friction import solve_friction_velocities
-from .kernels.jkr import jkr_forces_celllist_numba
+from .kernels.jkr import jkr_forces_celllist_numba, jkr_stable_dt
 from .kernels.stokeslet import (
     update_fluid_velocity_numba,
     update_fluid_velocity_with_dipoles_numba,
@@ -251,6 +251,7 @@ class CellSimulation:
         self.friction_cell_cell = float(config.get('friction_cell_cell', 0.0))
         self.friction_cutoff_factor = float(config.get('friction_cutoff_factor', 1.0))
         self.friction_tol = float(config.get('friction_tol', 1e-8))
+        self._jkr_dt_warned = False
         self._friction_iters = 0
         self._friction_residual = 0.0
         if self.velocity_model == 'friction':
@@ -700,6 +701,22 @@ class CellSimulation:
         # 3c. Cell-shape mechanics: deform under contact stress (issue #22).
         if self.enable_cell_shape:
             self._update_shapes(cell_positions, radii)
+
+        # 3d. JKR contact stiffness vs timestep (issue #33). Exceeding this
+        #     bound does NOT blow up loudly -- the pack fragments quietly while
+        #     still producing plausible-looking shape statistics, which is the
+        #     failure mode that briefly made the square test look like it passed.
+        if (self.contact_model == 'jkr' and self.velocity_model == 'friction'
+                and not self._jkr_dt_warned and len(radii) > 0):
+            dt_max = jkr_stable_dt(
+                cell_positions, radii, self.jkr_modulus, self.jkr_work_adhesion,
+                self.friction_substrate, physical_size=self.physical_size)
+            if self.dt > dt_max:
+                print(f"\nWARNING: dt = {self.dt:.4g} exceeds the JKR stability "
+                      f"bound {dt_max:.4g} (contact stiffness / friction). The "
+                      f"pack may fragment silently; reduce dt, soften "
+                      f"jkr_modulus, or raise friction_substrate.")
+                self._jkr_dt_warned = True
 
         # 4. Check CFL stability for advection (warn once per simulation)
         if not self._cfl_warned:

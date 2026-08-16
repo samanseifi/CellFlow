@@ -28,9 +28,13 @@ def cell_list(positions, radii, cutoff_factor=1.0):
     return order, start, nbx, bin_size
 
 
-def solve(pos, rad, F, gsub, gcc, cutoff=1.0):
+def solve(pos, rad, F, gsub, gcc, cutoff=1.0, tol=1e-6):
+    """Correctness tests pass their own tolerance rather than relying on the
+    production default, which is a performance choice (1e-6 is ample for a
+    velocity that is then multiplied by dt)."""
     return solve_friction_velocities(pos, rad, F, gsub, gcc,
-                                     cutoff_factor=cutoff, physical_size=BOX)
+                                     cutoff_factor=cutoff, physical_size=BOX,
+                                     tol=tol)
 
 
 class TestIsolatedCell:
@@ -90,10 +94,10 @@ class TestOperator:
         pos = rng.uniform(40.0, 90.0, size=(80, 2))
         rad = np.full(80, 3.0)
         F = rng.standard_normal((80, 2))
-        v, info = solve(pos, rad, F, 1.0, 3.0)
+        v, info = solve(pos, rad, F, 1.0, 3.0, tol=1e-12)
         residual = friction_matvec_numba(v, pos, rad, 1.0, 3.0, 1.0,
                                          *cell_list(pos, rad)) - F
-        assert np.abs(residual).max() < 1e-6, info
+        assert np.abs(residual).max() < 1e-8, info
 
 
 class TestGalileanInvariance:
@@ -199,6 +203,6 @@ class TestSolverMechanics:
         pos = rng.uniform(40.0, 90.0, size=(400, 2))
         rad = np.full(400, 3.0)
         F = rng.standard_normal((400, 2))
-        _, info = solve(pos, rad, F, 1.0, 20.0)
-        assert info['residual'] <= 1e-8
+        _, info = solve(pos, rad, F, 1.0, 20.0, tol=1e-10)
+        assert info['residual'] <= 1e-10
         assert info['iterations'] < 200

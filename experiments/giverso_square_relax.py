@@ -52,6 +52,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from cellflow.simulation import CellSimulation                      # noqa: E402
 from cellflow.cell import Cell                                      # noqa: E402
+from cellflow.kernels.jkr import (jkr_stable_dt,                    # noqa: E402
+                                  jkr_equilibrium_overlap)
 from cellflow.analysis.front import (front_radii, main_cluster_mask,  # noqa: E402
                                      front_modes)
 import giverso_dispersion as gd                                     # noqa: E402
@@ -128,10 +130,16 @@ def mode4(pos, rad, center):
     return float(front_modes(r)[4])
 
 
-def run(label, regime, steps, sample=None):
+def run(label, regime, steps, sample=None, half=HALF):
     sample = sample or max(1, steps // 5)
-    sim = CellSimulation(gd.make_config(regime, 1), config_name='square_relax')
-    sim.cells = build_square(regime, np.random.default_rng(1))
+    cfg = gd.make_config(regime, 1)
+    for k in ('velocity_model', 'friction_substrate', 'friction_cell_cell',
+              'friction_cutoff_factor', 'contact_model', 'jkr_modulus',
+              'jkr_work_adhesion', 'overlap_iterations'):
+        if k in regime:
+            cfg[k] = regime[k]
+    sim = CellSimulation(cfg, config_name='square_relax')
+    sim.cells = build_square(regime, np.random.default_rng(1), half=half)
     sim.nutrient_field[:] = regime['bc_value']       # uniform; uptake is zero
     ctr = np.array([regime['L'] / 2, regime['L'] / 2])
 
@@ -229,7 +237,7 @@ def main():
     return results
 
 
-if __name__ == '__main__' and not ({'trapped','screening','friction'} & set(sys.argv)):
+if __name__ == '__main__' and not ({'trapped','screening','gate'} & set(sys.argv)):
     main()
 
 
@@ -318,42 +326,75 @@ if __name__ == '__main__' and 'screening' in sys.argv:
     screening_test(3000)
 
 
-def friction_test(steps=3000):
-    """ACCEPTANCE GATE for issue #32: does the local friction law round a square?
+def gate_test(phys_time=600.0):
+    """ACCEPTANCE GATE for #32/#33, at a resolvable size and a STABLE timestep.
 
-    Under the fluid law the answer is no, and adhesion strength makes no
-    difference, because v_cell = u_fluid(x_cell) advects every cell by one
-    smooth field and neighbours can never exchange places. The friction law
-    solves gamma_sub v_i + sum_j gamma_cc w_ij (v_i - v_j) = F_i instead, which
-    is local and does permit relative motion.
+    Four things went wrong on earlier attempts and are fixed here.
 
-    The gate has two halves, and both must pass:
-      1. the square must actually round (circularity -> 1, a4 -> 0);
-      2. it must round FASTER with stronger adhesion, since it is the adhesive
-         well that supplies the driving force.
-    Half 2 matters as much as half 1: rounding that does not respond to adhesion
-    is the pack relaxing, not a surface tension.
+    * The timestep was not stability-bounded. JKR contact stiffness with an
+      overdamped velocity law needs dt < 2 gamma / k; at dt = 0.05 the pack
+      fragmented to 34% of its cells while still reporting a plausible
+      circularity. `jkr_stable_dt` supplies the bound and each run takes it.
+    * a4 was unresolvable. Mode 4 on a 149-cell blob has ~45 boundary cells.
+      Shrinking the cells at fixed box size gives ~700 cells and ~100 on the
+      boundary, WITHOUT lengthening the relaxation time -- which scales with the
+      colony size, not the cell size.
+    * Runs were compared at equal STEP count, meaningless once dt varies.
+    * The pack was built at delta = 0 (cells exactly touching), but JKR's
+      equilibrium overlap is positive -- 0.207 for E* = 20, w = 1. Starting at
+      zero overlap puts every contact on the adhesive branch near the snap
+      point, where the stiffness diverges, and the stability bound collapsed
+      to dt = 0.0011 for that case alone. Building the pack AT its equilibrium
+      overlap is both physically right (a relaxed tissue sits there) and what
+      makes the timestep uniform across the sweep.
     """
-    print("\nACCEPTANCE GATE (#32): local friction velocity law")
-    print("  gamma_sub = substrate drag; gamma_cc = cell-cell friction\n")
+    HALF_S, CR = 15.0, 0.75
+    E_STAR = 20.0
+    W_REF = 0.3
+    # Every run uses the SAME lattice -- the equilibrium spacing of the
+    # reference adhesion -- so all four start from an identical 820-cell square
+    # and only the work of adhesion differs. Letting each build at its own
+    # equilibrium instead changed the cell count from 725 to 14,035 across the
+    # sweep, which is not a controlled comparison.
+    #
+    # The physical control is the dimensionless w/(E* R), not w. Past ~0.3 the
+    # equilibrium overlap exceeds half a cell diameter and the cells simply fuse
+    # (at w = 20 it reached 77%), so the sweep stays in 0 to 0.1 where they
+    # remain recognisable cells.
+    d_ref = jkr_equilibrium_overlap(0.5 * CR, E_STAR, W_REF)
+    spacing_factor = (2.0 * CR - d_ref) / CR
+
+    print("\nACCEPTANCE GATE (#32/#33): friction velocity law + JKR contact")
+    print(f"  square half-width {HALF_S}, cell radius {CR}, E* = {E_STAR}")
+    print(f"  physical time {phys_time}; identical lattice for every run "
+          f"(spacing {spacing_factor:.4f}); dt from the stability bound\n")
     out = []
-    for ad in (0.0, 0.5, 5.0, 50.0):
-        out.append(run(f"friction, adhesion={ad}",
-                       square_regime(velocity_model='friction',
-                                     friction_substrate=1.0,
-                                     friction_cell_cell=0.5,
-                                     adhesion=ad), steps))
-    print()
-    for gcc in (0.0, 5.0):
-        out.append(run(f"friction gamma_cc={gcc}, adhesion=5.0",
-                       square_regime(velocity_model='friction',
-                                     friction_substrate=1.0,
-                                     friction_cell_cell=gcc,
-                                     adhesion=5.0), steps))
-    print("\n  PASS requires: circularity rising toward 1.0, AND more adhesion")
-    print("  giving more rounding.")
+    for w in (0.0, 0.1, 0.3, 1.0):
+        # overlap_iterations = 0 is essential and was silently overridden
+        # before: make_config copies it from the regime, and PROPORTIONAL sets
+        # 1, so the geometric projection kept running under JKR -- exactly the
+        # thing issue #31 says destroys cohesion.
+        over = dict(velocity_model='friction', friction_substrate=1.0,
+                    friction_cell_cell=0.5, contact_model='jkr',
+                    jkr_modulus=E_STAR, jkr_work_adhesion=w,
+                    overlap_iterations=0)
+        reg = square_regime(spacing_factor=spacing_factor, L=120.0, G=60,
+                            R0=HALF_S, cell_r=CR, max_radius=CR * 1.2, **over)
+        probe = build_square(reg, np.random.default_rng(1), half=HALF_S)
+        pos = np.array([c.position for c in probe])
+        rad = np.array([c.radius for c in probe])
+        dt = min(jkr_stable_dt(pos, rad, E_STAR, w, 1.0, physical_size=120.0), 0.02)
+        reg['dt'] = dt
+        steps = int(phys_time / dt)
+        r = run(f"w={w} (w/E*R={w/(E_STAR*0.5*CR):.3f}, dt={dt:.4f})",
+                reg, steps, sample=max(1, steps // 5), half=HALF_S)
+        for t, c, m in r['traj']:
+            print(f"      t={t*dt:8.1f}   C={c:.4f}   a4={m:.4f}", flush=True)
+        out.append((w, r))
+    print("\n  PASS: circularity rising toward 1.0 AND increasing with adhesion,")
+    print("        a4 falling, cluster intact.")
     return out
 
 
-if __name__ == '__main__' and 'friction' in sys.argv:
-    friction_test(int(sys.argv[1]) if sys.argv[1].isdigit() else 3000)
+if __name__ == '__main__' and 'gate' in sys.argv:
+    gate_test(float(sys.argv[1]) if sys.argv[1].replace('.','').isdigit() else 400.0)

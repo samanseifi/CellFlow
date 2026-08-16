@@ -101,8 +101,45 @@ def friction_matvec_numba(v, positions, radii, gamma_sub, gamma_cc,
     return out
 
 
+@njit(parallel=True, cache=True)
+def friction_diagonal_numba(positions, radii, gamma_sub, gamma_cc,
+                            cutoff_factor, order, bin_start, nbx, bin_size):
+    """Diagonal of A: gamma_sub + sum_j gamma_cc w_ij, per cell."""
+    n = positions.shape[0]
+    diag = np.empty(n)
+    for i in prange(n):
+        acc = gamma_sub
+        bx = int(positions[i, 0] / bin_size)
+        by = int(positions[i, 1] / bin_size)
+        if bx < 0: bx = 0
+        elif bx >= nbx: bx = nbx - 1
+        if by < 0: by = 0
+        elif by >= nbx: by = nbx - 1
+        for dby in range(-1, 2):
+            ny = by + dby
+            if ny < 0 or ny >= nbx:
+                continue
+            for dbx in range(-1, 2):
+                nx = bx + dbx
+                if nx < 0 or nx >= nbx:
+                    continue
+                b = ny * nbx + nx
+                for s in range(bin_start[b], bin_start[b + 1]):
+                    j = order[s]
+                    if j == i:
+                        continue
+                    dx_ = positions[j, 0] - positions[i, 0]
+                    dy_ = positions[j, 1] - positions[i, 1]
+                    dist = np.sqrt(dx_ * dx_ + dy_ * dy_)
+                    touch = radii[i] + radii[j]
+                    acc += gamma_cc * _contact_weight(dist, touch,
+                                                      touch * cutoff_factor)
+        diag[i] = acc
+    return diag
+
+
 def solve_friction_velocities(positions, radii, forces, gamma_sub, gamma_cc,
-                              cutoff_factor=1.0, tol=1e-8, max_iter=200,
+                              cutoff_factor=1.0, tol=1e-6, max_iter=200,
                               cell_list=None, physical_size=None, v0=None):
     """Solve ``A v = F`` for the cell velocities by Conjugate Gradient.
 
@@ -153,16 +190,20 @@ def solve_friction_velocities(positions, radii, forces, gamma_sub, gamma_cc,
                                      cutoff_factor, order, bin_start, nbx,
                                      bin_size)
 
-    # Jacobi preconditioner: the diagonal is gamma_sub + sum_j gamma_cc w_ij,
-    # recovered by applying A to a unit vector per component would be wrong
-    # (that includes off-diagonal terms), so take the row sums of the coupling
-    # via A(1) - which for uniform v gives exactly gamma_sub * 1.
-    # Instead use the cheap and adequate constant preconditioner gamma_sub.
+    # Jacobi preconditioner. The diagonal is gamma_sub + sum_j gamma_cc w_ij,
+    # which varies across the population -- an interior cell has six contacts, a
+    # surface cell three -- so it is worth forming. A constant gamma_sub is not
+    # a preconditioner at all (it only rescales), and with it CG needed ~19
+    # iterations per step on a dense pack.
+    diag = friction_diagonal_numba(positions, radii, gamma_sub, gamma_cc,
+                                   cutoff_factor, order, bin_start, nbx,
+                                   bin_size).reshape(-1, 1)
+
     b = np.ascontiguousarray(forces, dtype=np.float64)
     v = np.zeros((n, 2)) if v0 is None else np.array(v0, dtype=np.float64)
 
     r = b - A(v)
-    z = r / gamma_sub
+    z = r / diag
     p = z.copy()
     rz = float(np.sum(r * z))
     bnorm = float(np.sqrt(np.sum(b * b)))
@@ -183,7 +224,7 @@ def solve_friction_velocities(positions, radii, forces, gamma_sub, gamma_cc,
         v += alpha * p
         r -= alpha * Ap
         res = float(np.sqrt(np.sum(r * r))) / bnorm
-        z = r / gamma_sub
+        z = r / diag
         rz_new = float(np.sum(r * z))
         p = z + (rz_new / rz) * p
         rz = rz_new
