@@ -31,6 +31,7 @@ from .kernels.neighbors import (
 )
 from .kernels.friction import solve_friction_velocities
 from .kernels.jkr import jkr_forces_celllist_numba, jkr_stable_dt
+from .kernels.surface_tension import surface_tension_forces
 from .kernels.stokeslet import (
     update_fluid_velocity_numba,
     update_fluid_velocity_with_dipoles_numba,
@@ -242,6 +243,24 @@ class CellSimulation:
             print(f"INFO: Contact model = JKR "
                   f"(E* = {self.jkr_modulus:.3g}, "
                   f"work of adhesion = {self.jkr_work_adhesion:.3g}).")
+
+        # Explicit interfacial surface tension (issue #36). The model has no
+        # curvature-dependent term of its own -- every existing term scales with
+        # the expansion rate, which is why lambda(k) = (dlnR/dt) * f(k) and the
+        # marginal mode is a pure number no growth-side knob can move. This
+        # supplies Young-Laplace directly at the boundary, giving Giverso et
+        # al.'s closure p = p0 - sigma_b C with sigma as an explicit parameter.
+        #
+        # With this on, a front instability is IMPOSED rather than emergent --
+        # as it is in the continuum model being compared against.
+        self.surface_tension = float(config.get('surface_tension', 0.0))
+        self.surface_tension_kmax = int(config.get('surface_tension_kmax', 20))
+        self.surface_tension_bins = int(config.get('surface_tension_bins', 360))
+        self._st_info = {}
+        if self.surface_tension > 0.0:
+            print(f"INFO: Interfacial surface tension ON "
+                  f"(sigma = {self.surface_tension:.3g}, "
+                  f"modes <= {self.surface_tension_kmax}).")
 
         self.velocity_model = config.get('velocity_model', 'fluid')
         if self.velocity_model not in ('fluid', 'friction'):
@@ -530,6 +549,16 @@ class CellSimulation:
                     propulsion_forces[i, 1] = 0.0
 
         monopolar_forces = adhesion_forces + repulsion_forces + division_forces
+
+        # Interfacial surface tension acts on boundary cells only (issue #36).
+        if self.surface_tension > 0.0 and len(radii) > 0:
+            center = cell_positions.mean(axis=0)
+            st_forces, self._st_info = surface_tension_forces(
+                cell_positions, radii, center, self.surface_tension,
+                k_max=self.surface_tension_kmax,
+                n_bins=self.surface_tension_bins)
+            monopolar_forces = monopolar_forces + st_forces
+
         return propulsion_forces, monopolar_forces
 
     def _update_ecm(self):
