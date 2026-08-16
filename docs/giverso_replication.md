@@ -1439,6 +1439,89 @@ is there.
 about fingering: *a square must become a disc, and it must do so faster with
 stronger adhesion.* Today it fails both halves.
 
+---
+
+# Emergent vs imposed: surface ENERGY without surface STRESS (2026-08-16)
+
+`#36` supplies a working surface tension, but it is imposed. The question of
+what would make it *emergent* has a precise answer, and it is not the one this
+document assumed.
+
+## The measurement
+
+`cellflow/analysis/interface_stress.py` measures surface tension mechanically,
+from the stress-tensor anisotropy across a flat interface (Kirkwood-Buff):
+
+    gamma = integral [ sigma_xx - sigma_yy ] dx
+
+This reads the answer off the *current configuration*, so unlike the shape test
+it is immune to jamming -- a frozen pack still reports the surface tension it
+possesses. On a JKR slab:
+
+| pack | gamma (**stress**) | gamma (**energy**, bond counting) |
+|---|---|---|
+| perfect lattice at equilibrium | **0.00000** | 0.041 |
+| jittered + relaxed, w = 0.3 | −0.020 | 0.041 |
+| jittered + relaxed, w = 1.0 | −0.023 | 0.328 |
+
+## Why zero, exactly
+
+A pair potential on a lattice at its own equilibrium spacing has **every bond at
+zero force**. In a hex lattice the bulk lattice constant *is* the pair
+equilibrium: all six neighbours sit at the same distance, so `6 F(sp) = 0`
+requires `F(sp) = 0`. A surface cell has fewer neighbours, but each remaining one
+is still at that distance — so it is force-free too.
+
+The interface therefore carries **positive surface energy** (bonds are missing)
+and **zero surface stress**. Those are different quantities, related by
+Shuttleworth, `f = gamma + dgamma/d(strain)`:
+
+> For a **liquid** they are equal, and the interface pulls itself in.
+> For a **solid** they differ, and only the *stress* drives shape change.
+
+**Our tissue is a solid.** That is the reason the square never rounds, and it
+supersedes the looser statements earlier in this document. Not that cohesion is
+too weak — the energy is there, 0.04 to 0.33. Not only that the pack jams — #40
+is the symptom, not the cause. The cause is that a cohesive pair potential in an
+*arrested* packing produces surface energy without surface stress.
+
+## What "emergent" therefore requires
+
+Not a different force law. **A different rheology** — the tissue has to be a
+liquid, i.e. able to explore packings. Candidates, in the order their physics
+suggests:
+
+1. **Neighbour exchange (T1 transitions)**, as vertex models implement
+   explicitly. This is the direct route: it is precisely the move a jammed pack
+   cannot make.
+2. **Cell deformability** — the DCM route in Van Liedekerke et al. Deformable
+   cells slide past one another where rigid disks lock; this is why real tissue
+   is liquid on long timescales.
+3. **Persistent (correlated) active motility** rather than white noise. The
+   noise tested here was uncorrelated and did nothing even at three times the
+   pull-off force; real cell motility has a persistence time, which is what lets
+   active matter fluidise.
+
+Growth alone is *not* sufficient: it does fluidise the pack (a growing square
+reaches circularity 0.96 where a static one freezes at 0.81), but the rounding
+is **not adhesion-dependent** — slightly weaker at w = 0.3 than at w = 0 — so it
+is growth relaxing the corners, not a surface tension acting.
+
+## The honest position for the write-up
+
+Two routes now exist and they answer different questions:
+
+- **#36, imposed.** Reproduces Giverso's closure exactly, passes the gate, and
+  lets `sigma` be swept. Fingering here would be *consistent with* the continuum
+  theory, not emergent from cell rules.
+- **Liquid rheology, emergent.** Would let `sigma` be measured rather than set,
+  and the Kirkwood-Buff harness above is exactly the instrument for confirming
+  it: on a genuinely liquid tissue, `gamma_stress` should rise to meet
+  `gamma_energy`.
+
+That convergence — stress meeting energy as the tissue is fluidised — is a
+sharper and more publishable claim than either route alone.
+
 ## Where this leaves the effort
 
 Not reproduced, and now with a quantitative reason rather than a null result.
