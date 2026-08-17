@@ -1522,6 +1522,62 @@ Two routes now exist and they answer different questions:
 That convergence — stress meeting energy as the tissue is fluidised — is a
 sharper and more publishable claim than either route alone.
 
+---
+
+# Surface tension supplies the missing cutoff -- but pushes k* the WRONG way (2026-08-16)
+
+`giverso_dispersion.py sigmascan|sigmahi`. The first dispersion measurements with
+an explicit capillary term (#36).
+
+| sigma | peak k | peak lambda | **k0** | linear r2 | **Mullins-Sekerka r2** |
+|---|---|---|---|---|---|
+| 0 | 2 | +0.0216 | 14.36 | 0.977 | 0.413 |
+| 3000 | **3** | +0.0228 | 11.54 | 0.978 | 0.594 |
+| 10000 | 2 | +0.0202 | **7.26** | 0.985 | 0.756 |
+| 30000 | 2 | +0.0162 | **4.23** | 0.885 | 0.778 |
+
+**The capillary term is unambiguously present and working.** k0 collapses
+14.4 -> 4.2, the high modes damp hard (k = 20 goes -0.012 -> -0.057) while k = 2
+barely moves, and the Mullins-Sekerka fit quality nearly doubles. This is the
+first `-Gamma k^3` term this model has ever had.
+
+**But it moves the selected mode DOWN**, k\* = 3 -> 2 -> 2. That is not a defect;
+it is M-S behaving correctly. Since k\* = sqrt(V/3 Gamma), raising Gamma *lowers*
+k\*. Surface tension eats the band from the high-k side.
+
+## What this isolates
+
+```
+lambda(k) = lambda_0 - c k - Gamma k^3     what the model has now
+lambda(k) =          + V k - Gamma k^3     what Mullins-Sekerka needs
+```
+
+The `-Gamma k^3` term is in. The missing piece is now unambiguous and singular:
+**a destabilising term that GROWS with k.** Ours is k-independent -- the
+geometric instability of any expanding circle -- so no value of sigma can create
+an interior peak at high k; it only trims the top of the band.
+
+That sits awkwardly against the measured flux elasticity E ~ 1.7, which says the
+front *does* respond to local flux. The response evidently does not scale with k
+the way M-S requires.
+
+## The likely reason, and the case it implies
+
+In M-S the `+V k` term comes from the perturbed nutrient field decaying as
+`e^(-k z)` away from the boundary, so the gradient at a tip is enhanced *in
+proportion to k*. For that enhancement to reach the cells, the velocity response
+must not itself be k-dependent in the opposite direction -- and under the fluid
+velocity law it is. The Brinkman transfer function suppresses force at wavenumber
+k by `1 + (k delta)^2`.
+
+> **The fluid velocity law actively cancels the term Mullins-Sekerka needs.**
+> Flux focusing supplies `+V k`; the Brinkman filter divides by `1 + (k delta)^2`.
+
+Every dispersion measurement in this document, including the sigma scans above,
+was made on that stack. The local friction law (#32) has no such filter -- it is
+`v = F/gamma` pointwise -- so the combined case (friction + JKR + surface
+tension) is the one that should be run, and had not been.
+
 ## Where this leaves the effort
 
 Not reproduced, and now with a quantitative reason rather than a null result.

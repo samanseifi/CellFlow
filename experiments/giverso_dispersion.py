@@ -282,6 +282,38 @@ SCREENING = [
 ]
 
 
+# Surface-tension series (issue #35/#36). The falsifiable test of the central
+# result: every existing term in this model scales with the expansion rate, so
+# lambda(k) = (dlnR/dt) * f(k) and the marginal mode k0 = lam0/c is a pure number
+# that no growth-side knob can move. Surface tension is the FIRST term that does
+# not scale with growth, so with it active:
+#
+#   * lam0/c must STOP being constant across a growth-rate series, and
+#   * lambda(k) should acquire the Mullins-Sekerka -Gamma k^3 shape, which it has
+#     never had (it fits lam0 - c k at r^2 = 0.94-1.00).
+#
+# sigma enters as a force sigma*kappa ~ sigma/R on boundary cells, against a
+# median propulsive force of ~142 in this regime, so the scale that bites is
+# sigma ~ 10^2-10^3. Scanned rather than assumed.
+SIGMA_SCAN = [dict(PROPORTIONAL, name=f'sigma_{int(sg)}', surface_tension=sg)
+              for sg in (0.0, 300.0, 3000.0)]
+
+# Higher sigma, more modes. The first scan showed the Mullins-Sekerka fit quality
+# climbing monotonically with sigma (r^2 0.41 -> 0.49 -> 0.75) while k=20 damped
+# 2.4x and k=2 barely moved -- the k^3 signature. Four modes cannot discriminate
+# two 2-parameter fits, so this resolves the shape properly.
+SIGMA_HIGH = [dict(PROPORTIONAL, name=f'sigmahi_{int(sg)}', surface_tension=sg)
+              for sg in (3000.0, 10000.0, 30000.0)]
+
+# Growth-rate series repeated WITH surface tension, the controlled comparison
+# against GROWTHRATE above.
+GROWTHRATE_ST = [
+    dict(PROPORTIONAL, name=f'st_growthrate_basal{b:.2f}', basal=b,
+         surface_tension=3000.0)
+    for b in (0.0, 0.06, 0.12)
+]
+
+
 def make_config(regime, seed):
     cfg = {
         'initial_setup_type': 'central_uniform', 'num_cells': 1,
@@ -305,6 +337,8 @@ def make_config(regime, seed):
         'directed_division': True,
         'diffusion_solver': regime['diffusion_solver'],
         'propulsion_response': regime.get('propulsion_response', 'saturated'),
+        'surface_tension': regime.get('surface_tension', 0.0),
+        'surface_tension_kmax': regime.get('surface_tension_kmax', 20),
     }
     if regime.get('growth_source'):
         cfg['enable_growth_source'] = True
@@ -847,6 +881,15 @@ def main():
         sweep(PROPORTIONAL, modes=[2, 3, 5, 7, 10, 14, 20], seeds=[1, 2, 3])
     elif what == 'propbig':
         sweep(PROPORTIONAL_BIG, modes=[3, 4, 6, 8, 10, 14], seeds=[1, 2])
+    elif what == 'sigmascan':
+        for reg in SIGMA_SCAN:
+            sweep(reg, modes=[2, 5, 10, 20], seeds=[1])
+    elif what == 'sigmahi':
+        for reg in SIGMA_HIGH:
+            sweep(reg, modes=[2, 3, 5, 7, 10, 14, 20], seeds=[1])
+    elif what == 'stgrowth':
+        for reg in GROWTHRATE_ST:
+            sweep(reg, modes=[2, 3, 5, 7, 10], seeds=[1, 2])
     elif what == 'screening':
         for reg in SCREENING:
             sweep(reg, modes=[2, 3, 5, 7, 10, 14, 20], seeds=[1, 2])
