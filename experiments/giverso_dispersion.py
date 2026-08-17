@@ -60,6 +60,7 @@ from cellflow.kernels.fields import absorb_nutrient_numba           # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from giverso_analytic import n0_of                                  # noqa: E402
+from cellflow.kernels.jkr import jkr_equilibrium_overlap            # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -314,6 +315,61 @@ GROWTHRATE_ST = [
 ]
 
 
+# THE COMBINED CASE (#32 + #33 + #36), which had never been run.
+#
+# Every dispersion measurement in this study, including the sigma scans, used the
+# FLUID velocity law -- and the Brinkman transfer function suppresses force at
+# wavenumber k by 1 + (k delta)^2. Mullins-Sekerka's destabilising term is +V k,
+# supplied by flux focusing scaling with k. So the velocity law was dividing out
+# precisely the k-dependence the instability needs:
+#
+#     flux focusing gives  +V k   ...  Brinkman divides by 1 + (k delta)^2
+#
+# The local friction law is v = F/gamma pointwise, with no such filter. This
+# regime combines it with JKR contact and the explicit capillary term, so for the
+# first time the model has all three of: a k-growing driver that is not filtered,
+# a real cohesive contact, and a -Gamma k^3 cutoff.
+#
+# gamma_sub = 2.5 matches the bulk mobility of the fluid path it replaces
+# (1/alpha = delta^2/mu = 196/500 = 0.39, so gamma ~ 2.5), keeping front speeds
+# comparable so lambda values remain on the same scale as everything above.
+# Feasibility note. Matching JKR cohesion to this regime's propulsion force
+# (median 142) needs a pull-off force of the same order, hence very stiff
+# contacts, and explicit integration of those costs 255,000-1,600,000 steps per
+# run -- 15-40 hours for a sweep. The stiffness is real, not a tuning failure,
+# and an implicit/adaptive contact integrator is the proper fix (#42).
+#
+# The question here is the SHAPE of lambda(k), not absolute rates, so the whole
+# force system is scaled down by ~14x (chi 150 -> 10) and the colony halved
+# (R0 177 -> 90, R/l ~ 10 instead of 20). Contacts then soften in proportion,
+# the stable timestep rises to 3.4e-3, and a run costs ~0.5 min. Colonies are
+# built AT the JKR equilibrium spacing, without which every contact starts on
+# the steep adhesive branch near the snap point.
+COMBINED = dict(
+    PROPORTIONAL, name='combined_fixes',
+    L=400.0, G=200, R0=90.0,
+    chi_nutrient=10.0, max_force=200.0,
+    velocity_model='friction', friction_substrate=2.5, friction_cell_cell=0.5,
+    contact_model='jkr', jkr_modulus=40.0, jkr_work_adhesion=4.0,
+    overlap_iterations=0, surface_tension=0.0,
+    spacing_factor=None,          # filled below from the JKR equilibrium
+    # dt from the measured JKR stability bound on the SEEDED, jittered
+    # packing (4.7e-4), not on an ideal lattice -- the perturbation and
+    # jitter both stiffen the contacts.
+    dt=0.0002, steps=175000, sample_every=7000,
+)
+_d_eq = jkr_equilibrium_overlap(0.5 * COMBINED['cell_r'],
+                                COMBINED['jkr_modulus'],
+                                COMBINED['jkr_work_adhesion'])
+COMBINED['spacing_factor'] = (2.0 * COMBINED['cell_r'] - _d_eq) / COMBINED['cell_r']
+
+# sigma rescaled with the force system: sigma*kappa ~ sigma/R against a
+# propulsion force of ~10 at R = 90, so sigma ~ 10^2-10^3 is the scale.
+COMBINED_SIGMA = [dict(COMBINED, name=f'combined_sigma_{int(sg)}',
+                       surface_tension=sg)
+                  for sg in (0.0, 90.0, 900.0)]
+
+
 def make_config(regime, seed):
     cfg = {
         'initial_setup_type': 'central_uniform', 'num_cells': 1,
@@ -337,9 +393,16 @@ def make_config(regime, seed):
         'directed_division': True,
         'diffusion_solver': regime['diffusion_solver'],
         'propulsion_response': regime.get('propulsion_response', 'saturated'),
+        'velocity_model': regime.get('velocity_model', None),
+        'friction_substrate': regime.get('friction_substrate', None),
+        'friction_cell_cell': regime.get('friction_cell_cell', None),
+        'contact_model': regime.get('contact_model', None),
+        'jkr_modulus': regime.get('jkr_modulus', None),
+        'jkr_work_adhesion': regime.get('jkr_work_adhesion', None),
         'surface_tension': regime.get('surface_tension', 0.0),
         'surface_tension_kmax': regime.get('surface_tension_kmax', 20),
     }
+    cfg = {k: v for k, v in cfg.items() if v is not None}
     if regime.get('growth_source'):
         cfg['enable_growth_source'] = True
         cfg['growth_source_strength'] = regime.get('growth_source_strength', 1.0)
@@ -366,7 +429,11 @@ def seeded_colony(regime, mode, rng):
     front advances only by cells swelling.
     """
     R0, cell_r, eps = regime['R0'], regime['cell_r'], regime['seed_eps']
-    spacing = 1.9 * cell_r
+    # 1.9 is the historical default; JKR regimes pass their equilibrium
+    # spacing instead, without which every contact starts near the snap
+    # point where the stiffness -- and so the timestep cost -- diverges.
+    spacing = regime.get('spacing_factor') or 1.9
+    spacing = spacing * cell_r
     jitter = 0.18 * cell_r
     async_phase = bool(regime.get('async_phase', False))
     Cell.next_id = 0
@@ -884,6 +951,14 @@ def main():
     elif what == 'sigmascan':
         for reg in SIGMA_SCAN:
             sweep(reg, modes=[2, 5, 10, 20], seeds=[1])
+    elif what == 'combined':
+        for reg in COMBINED_SIGMA:
+            sweep(reg, modes=[2, 3, 5, 7, 10, 14, 20], seeds=[1])
+    elif what == 'combprobe':
+        r = run_one(dict(COMBINED, steps=120, sample_every=30), mode=10, seed=1)
+        print(f"\nprobe: n {r['n_start']}->{r['n_end']}  R {r['R_start']:.1f}->"
+              f"{r['R_end']:.1f}  det {r['max_detached_frac']*100:.1f}%  "
+              f"lam {r['lambda_rel']:+.4f}  valid={r['valid']}")
     elif what == 'sigmahi':
         for reg in SIGMA_HIGH:
             sweep(reg, modes=[2, 3, 5, 7, 10, 14, 20], seeds=[1])
