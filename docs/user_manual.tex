@@ -275,6 +275,71 @@ Requires \code{fluid\_model='brinkman\_fft'}.
 \code{overlap\_iterations} (or \code{growth\_source\_strength}) so the expansion
 is not counted twice.
 
+\subsection{Cell velocity law}
+\begin{longtable}{p{0.30\textwidth} p{0.16\textwidth} p{0.46\textwidth}}
+\toprule
+Key & Default & Meaning \\ \midrule \endhead
+\code{velocity\_model} & \code{'fluid'} & \code{'fluid'}: velocity is the solved
+  flow field at the cell centre. \code{'friction'}: local drag balance \\
+\code{friction\_substrate} & \code{1.0} & substrate drag $\gamma_{\text{sub}}$;
+  an isolated cell moves at $\mathbf{f}/\gamma_{\text{sub}}$ \\
+\code{friction\_cell\_cell} & \code{0.0} & cell--cell friction
+  $\gamma_{\text{cc}}$; \code{0} gives pure local mobility \\
+\code{friction\_cutoff\_factor} & \code{1.0} & friction range as a multiple of
+  the touching distance \\
+\bottomrule
+\end{longtable}
+Which to use is a question of regime, not of quality. The fluid path is correct
+for cells in suspension, where momentum genuinely travels through the medium.
+For dense tissue on a substrate it has a consequence worth knowing: every cell is
+advected by one smooth field, so two neighbours cannot move relative to one
+another and can never exchange places. Concretely, the Brinkman solver suppresses
+force at wavenumber $k$ by $1+(k\delta)^2$ --- a factor of $416$ at the cell scale
+for typical colony settings --- so a random per-cell force of $150$ produces the
+same displacement as none at all. If you need cell-scale rearrangement (shape
+relaxation, sorting, anything surface-tension driven), use \code{'friction'}.
+
+\subsection{Contact mechanics}
+\begin{longtable}{p{0.30\textwidth} p{0.16\textwidth} p{0.46\textwidth}}
+\toprule
+Key & Default & Meaning \\ \midrule \endhead
+\code{contact\_model} & \code{'legacy'} & \code{'legacy'}: exponential repulsion
+  plus linear adhesive spring. \code{'jkr'}: Johnson--Kendall--Roberts \\
+\code{jkr\_modulus} & \code{100.0} & reduced modulus $E^\ast$ \\
+\code{jkr\_work\_adhesion} & \code{1.0} & work of adhesion $w$ (energy per area) \\
+\bottomrule
+\end{longtable}
+JKR gives a continuous force law with a real cohesive well and an adhesive neck
+that survives to negative overlap, so cells resist being pulled apart. It sets
+\code{overlap\_iterations} to \code{0} by default, since it carries its own
+repulsion and the geometric projection would override the force balance.
+
+The dimensionless control is $w/(E^\ast \hat R)$, not $w$. Past $\approx 0.3$ the
+equilibrium overlap exceeds half a cell diameter and cells effectively fuse; keep
+it below $\approx 0.1$.
+
+\subsection{Interfacial surface tension}
+\begin{longtable}{p{0.30\textwidth} p{0.16\textwidth} p{0.46\textwidth}}
+\toprule
+Key & Default & Meaning \\ \midrule \endhead
+\code{surface\_tension} & \code{0.0} & Young--Laplace coefficient $\sigma$;
+  \code{0} disables the term \\
+\code{surface\_tension\_kmax} & \code{20} & boundary modes retained when
+  computing curvature \\
+\code{surface\_tension\_bins} & \code{360} & angular bins for the boundary
+  profile \\
+\bottomrule
+\end{longtable}
+Applies $\sigma\kappa$ inward on boundary cells, giving the pressure jump
+$p=p_0-\sigma\kappa$ that continuum colony models close with. Curvature comes
+from a band-limited $R(\theta)$ parameterisation, so \code{surface\_tension\_kmax}
+is a genuine physical choice: it sets the shortest boundary wavelength that
+carries curvature. Requires a colony that is star-shaped about its centroid.
+
+Note this makes surface tension \emph{imposed} rather than emergent from the
+contact law. That is the same closure continuum models use, but it should be
+stated when reporting results.
+
 \section{Worked examples}
 
 \subsection{Cluster growth (accurate sizes)}
@@ -382,6 +447,25 @@ dispersion relation $\lambda(k)$ mode by mode, with guards against the
 measurement artifacts that make front instabilities easy to over-report). See
 \code{experiments/README.md} for the catalogue.
 
+Three of these are diagnostics rather than demos, and are worth knowing about:
+\begin{itemize}
+  \item \code{giverso\_square\_relax.py} --- does a square of cells relax into a
+        disc under the mechanics alone? A square is a sharper surface-tension
+        probe than a rectangle, because aspect ratio cannot distinguish a square
+        from a disc but corners and flat edges are exactly what curvature acts
+        on. This is the acceptance test for any contact-mechanics change:
+        \emph{a square must become a disc, and faster with stronger adhesion.}
+  \item \code{giverso\_growthprofile.py} --- measures the specific growth rate
+        $g(r)$ directly, rather than inferring growth localisation from the
+        binary quiescence flag, plus the front flux budget and an effective
+        expansion parameter.
+  \item \code{cellflow/analysis/interface\_stress.py} --- measures the
+        \emph{emergent} surface tension from the stress tensor (Kirkwood--Buff).
+        Unlike a shape test it works on a frozen configuration, so it separates
+        ``no surface tension'' from ``has one but cannot reach the lower-energy
+        shape''.
+\end{itemize}
+
 \section{Reproducibility and testing}
 \begin{itemize}
   \item Set \code{seed} for bit-for-bit reproducible runs (independent of the
@@ -392,6 +476,28 @@ measurement artifacts that make front instabilities easy to over-report). See
 
 \section{Tips and common pitfalls}
 \begin{itemize}
+  \item \textbf{JKR contacts are stiff --- and fail quietly:} with
+        \code{contact\_model='jkr'} and the friction velocity law, explicit
+        Euler needs $\Delta t < 2\gamma/k_{\max}$, where $k_{\max}$ is the
+        largest contact stiffness. Exceeding it does \emph{not} blow up loudly:
+        the pack fragments while still reporting plausible shape statistics. The
+        simulation warns once; heed it. Symptoms of having ignored it are a
+        receding front and a main connected cluster well below $100\%$.
+  \item \textbf{Build JKR packs at the equilibrium overlap:} JKR's zero-force
+        separation is \emph{less} than the touching distance, so a colony laid
+        out at ``just touching'' starts every contact on the steep adhesive
+        branch near the snap point, where the stiffness --- and hence the
+        timestep cost --- diverges. Use
+        \code{jkr\_equilibrium\_overlap(R\_reduced, E, w)} to set the lattice
+        spacing. In one sweep this alone changed the admissible \code{dt} by more
+        than an order of magnitude.
+  \item \textbf{Motility that does nothing:} under
+        \code{velocity\_model='fluid'} a per-cell random force is filtered by the
+        Brinkman transfer function, $1/(1+(k\delta)^2)$, which is a factor of
+        $\sim\!400$ at the cell scale. Random-walk parameters can then be varied
+        over orders of magnitude with no measurable effect. If motility is meant
+        to drive cell-scale rearrangement, use \code{velocity\_model='friction'}
+        and verify by measuring mean displacement with the force on and off.
   \item \textbf{Diffusion blow-up:} the explicit solver needs
         $D\,\Delta t/\Delta x^2 \le 1/4$ (the code warns otherwise); reduce
         \code{dt}, coarsen the grid, or switch to

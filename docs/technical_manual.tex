@@ -243,6 +243,53 @@ force linear in the separation beyond contact,
   \vf^{\text{adh}}_i = \sum_j k_{\text{adh}}\,(d_{ij}-(R_i+R_j))\,\hat{\vr}_{ij}.
 \end{equation}
 
+\paragraph{JKR adhesive contact (\texttt{contact\_model='jkr'}).} The
+repulsion/adhesion pair above has no derivation and a discontinuity at contact:
+repulsion switches on at $d_{ij}=R_i+R_j$ with magnitude $k_{\text{rep}}$, while
+adhesion acts only \emph{outside} contact. Measured on a packed colony the mean
+repulsive force is $56$ against a mean adhesive force of $0.11$, a factor of
+$500$, and the resulting cohesive well is $0.75$ deep. Johnson--Kendall--Roberts
+contact replaces both with a single continuous law, parameterised by the contact
+radius $a$:
+\begin{align}
+  F(a)      &= \frac{4E^\ast a^3}{3\hat R} - \sqrt{8\pi w E^\ast a^3},\\
+  \delta(a) &= \frac{a^2}{\hat R} - \sqrt{\frac{2\pi w a}{E^\ast}},
+\end{align}
+with $\hat R = R_iR_j/(R_i+R_j)$ the reduced radius, $E^\ast$ the reduced modulus
+and $w$ the work of adhesion. Given the overlap $\delta$, $a$ is obtained on the
+stable branch $a\ge a_{\min}$ by safeguarded Newton iteration.
+
+Two features distinguish it from the law it replaces. First, a genuine cohesive
+well. Second, $\delta(a)$ is non-monotonic, with a minimum at
+$a_{\min}=(cR/4)^{2/3}$, $c=\sqrt{2\pi w/E^\ast}$: contact therefore persists to
+\emph{negative} overlap, so cells resist being pulled apart. The two closed-form
+landmarks, both reproduced to six significant figures, are
+\begin{equation}
+  F_c = -\tfrac{3}{2}\pi w \hat R \quad\text{(pull-off, load control)},\qquad
+  \delta_c = -\tfrac{3}{4}\left(\frac{\pi^2w^2\hat R}{E^{\ast 2}}\right)^{1/3}
+  \quad\text{(snap, displacement control)} .
+\end{equation}
+These are \emph{different} points; since the simulation is displacement
+controlled, the neck snaps at $\delta_c$, where the force is not $F_c$. Setting
+$w=0$ recovers Hertz exactly. JKR carries its own repulsion continuously, so the
+overlap projection is unnecessary---and harmful, since it overrides the force
+balance---and defaults off.
+
+\paragraph{Timestep bound.} JKR contacts are stiff. With an overdamped velocity
+law, a contact of stiffness $k=\mathrm{d}F/\mathrm{d}\delta$ relaxes at rate
+$k/\gamma$, so explicit Euler requires
+\begin{equation}
+  \dt < \frac{2\gamma}{k_{\max}},\qquad
+  k_{\max}=\max_{\text{contacts}}\left|\frac{\mathrm{d}F}{\mathrm{d}\delta}\right| .
+\end{equation}
+This matters because violating it does \emph{not} blow up loudly: the pack
+fragments quietly while still producing plausible shape statistics. The bound is
+computed by \texttt{jkr\_stable\_dt} and the simulation warns once when exceeded.
+Note $\mathrm{d}\delta/\mathrm{d}a=0$ at the snap point, so the stiffness diverges
+there; a pack built at zero overlap rather than at the JKR equilibrium overlap
+starts every contact near that singularity, and the admissible timestep collapses
+by an order of magnitude.
+
 \paragraph{Differential adhesion.} With cell types and a symmetric adhesion
 matrix $\bm{D}$, the scalar strength $k_{\text{adh}}$ is replaced by
 $D_{\tau_i\tau_j}$. Following the Differential Adhesion Hypothesis, the
@@ -445,6 +492,90 @@ relation combining a self term (Stokes drag) and hydrodynamic interactions:
 Cells advance by forward Euler, $\vx_k \leftarrow \vx_k + \vu_k\,\dt$, which is
 first order in $\dt$ (verified).
 
+\paragraph{Local friction law (\texttt{velocity\_model='friction'}).} Both paths
+above are \emph{non-local}: a cell's velocity is set by a field, so neighbouring
+cells share it. Under the Brinkman/IBM path this is exact---$\vu_k$ is the
+interpolated fluid velocity---and it has a consequence worth stating plainly:
+two neighbours cannot acquire relative velocity at the cell scale, and therefore
+can never exchange places. The centre-based-model standard instead solves a local
+friction balance,
+\begin{equation}
+  \gamma_{\text{sub}}\,\vu_i
+  + \sum_j \gamma_{\text{cc}}\,w_{ij}\,(\vu_i-\vu_j) = \vf_i ,
+\end{equation}
+with $\gamma_{\text{sub}}$ substrate drag, $\gamma_{\text{cc}}$ cell--cell
+friction and $w_{ij}$ a contact weight tapering to zero at the cutoff. The
+operator is $\gamma_{\text{sub}}\mathsf{I}+\mathsf{L}$ with $\mathsf{L}$ the
+weighted graph Laplacian of the contact network---symmetric positive definite for
+$\gamma_{\text{sub}}>0$---and is solved matrix-free by Jacobi-preconditioned
+conjugate gradient. Galilean invariance is structural: $\mathsf{L}$ annihilates
+uniform velocity, so only substrate drag breaks translation invariance. An
+isolated cell recovers $\vu=\vf/\gamma_{\text{sub}}$ exactly.
+
+\paragraph{The fluid path is a low-pass filter on force.} This is a property of
+the Brinkman solver, not a bug, but it governs which physics can be represented.
+The transfer function (Section~\ref{sec:fluid}) gives
+\begin{equation}
+  \frac{\lvert\vu(k)\rvert}{\lvert\vu(k\!\to\!0)\rvert}
+  = \frac{1}{1+(k\delta)^2},
+\end{equation}
+so a force varying at wavenumber $k$ produces velocity suppressed by
+$1+(k\delta)^2$. At $\mu=500$, $\delta=14$ and a cell spacing of $4.32$ that is a
+factor of $416$ at the cell scale. Measured consequence: a random propulsive
+force of $150$ per cell---three times the mean repulsive force---changes the mean
+displacement over $500$ steps from $3.154$ to $3.159$, i.e. not at all. Cell-scale
+rearrangement, and hence surface-tension-driven shape relaxation, cannot occur
+through this velocity law at any screening length. The friction law has no such
+filter. Choose the fluid path for suspensions and bioreactors, where momentum
+genuinely travels through the medium, and the friction path for dense tissue on a
+substrate.
+
+\section{Interfacial surface tension}\label{sec:surften}
+
+The model has no curvature-dependent term of its own. Every mechanical term
+scales with the expansion rate, with the measured consequence that the front
+dispersion relation factorises as
+$\lambda(k)=(\dot R/R)\,f(k)$, so the marginal mode $k_0=\lambda_0/c$ is a pure
+number that no growth-side parameter can move (Section~\ref{sec:limits}).
+Setting \texttt{surface\_tension} $>0$ supplies Young--Laplace explicitly at the
+boundary, which is the closure continuum colony models use,
+$p = p_0 - \sigma\kappa$.
+
+\paragraph{Why not a grid continuum surface force.} The standard construction
+(Brackbill CSF) smooths an occupancy field $\phi$, forms
+$\kappa=-\nabla\!\cdot\!(\nabla\phi/\lvert\nabla\phi\rvert)$ and applies
+$\sigma\kappa\bm{n}\lvert\nabla\phi\rvert$. This was implemented and rejected on
+measurement: curvature is a second derivative, the cell-scale roughness of a
+packed boundary dominates it, and $\kappa R$ for a disc came out between $0.07$
+and $1.33$ depending on colony size and smoothing width, with no setting accurate
+across sizes.
+
+\paragraph{Band-limited boundary parameterisation.} Instead the boundary is
+written as $R(\theta)$ about the colony centroid and truncated to angular modes
+$k\le k_{\max}$, after which curvature follows in closed form,
+\begin{equation}
+  \kappa = \frac{R^2 + 2R'^2 - RR''}{\left(R^2+R'^2\right)^{3/2}},
+\end{equation}
+with the derivatives taken spectrally, so the result is \emph{exact} for the
+truncated shape rather than a finite difference of a noisy one. Truncation is the
+physically appropriate regularisation: front modes of interest are $k\lesssim 20$,
+and cell-scale modes are not interface shape. Verified: $\kappa R = 1.000000$ for
+discs at every radius tested, and the analytic curvature of a lobed front to
+eight significant figures including the negative values in its valleys.
+
+The force $\sigma\kappa$ is applied inward along the local normal to boundary
+cells only, so it is a surface rather than a body term. For a disc it reduces to
+a uniform inward $\sigma/R$, reproduced to $10^{-14}$.
+
+\paragraph{Limitation.} $R(\theta)$ requires a colony that is star-shaped about
+its centroid. That holds for lobed discs through deep-necked fingers, but would
+fail for an overhanging or fragmented shape, and callers should check.
+
+\paragraph{Scope.} With this term active an interfacial instability is
+\emph{imposed} rather than emergent from cell-scale rules---as it is in the
+continuum models being compared against. Section~\ref{sec:kb} gives the
+measurement that distinguishes the two.
+
 \section{Mechanotransduction}\label{sec:mechano}
 
 Cells sense the local fluid shear and reorient. From the solved velocity, the
@@ -601,6 +732,47 @@ as a length. In CellFlow's soft-particle mechanics this comes out at a few cell
 radii (Section~\ref{sec:limits}), which bounds how many fingers a colony of a
 given size can support.
 
+\subsection{Emergent surface tension: energy versus stress}\label{sec:kb}
+
+Whether the model's \emph{own} mechanics carries a surface tension cannot be
+settled by watching a shape relax, because a shape that does not relax may have
+no surface tension or may have one and be unable to reach the lower-energy state.
+The mechanical route separates them. For a flat interface with normal along $x$,
+\begin{equation}
+  \gamma = \int \left[\sigma_{xx}(x) - \sigma_{yy}(x)\right]\mathrm{d}x ,
+\end{equation}
+(Kirkwood--Buff), with the stress taken as the pair virial
+$\sigma_{ab}=-A^{-1}\sum_{i<j} f_{ij,a} r_{ij,b}$ binned along $x$. This is read
+off the current configuration and so is immune to kinetic arrest.
+
+Measured on a JKR slab, the result explains the shape behaviour:
+\begin{center}
+\begin{tabular}{lrr}
+\toprule
+pack & $\gamma$ (stress) & $\gamma$ (energy, bond counting) \\ \midrule
+perfect lattice at equilibrium & $0.00000$ & $0.041$ \\
+jittered + relaxed, $w=0.3$    & $-0.020$  & $0.041$ \\
+jittered + relaxed, $w=1.0$    & $-0.023$  & $0.328$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A pair potential on a lattice at its own equilibrium spacing has \emph{every}
+bond at zero force: in a hex lattice the bulk lattice constant \emph{is} the pair
+equilibrium, since all six neighbours are equidistant and $6F(s)=0$ forces
+$F(s)=0$. A surface cell has fewer neighbours, but each remaining one is still at
+that distance, so it too is force-free. The interface therefore carries positive
+surface \emph{energy} (bonds are missing) and zero surface \emph{stress}. These
+are distinct quantities related by Shuttleworth,
+$f=\gamma+\mathrm{d}\gamma/\mathrm{d}\varepsilon$: for a liquid they are equal and
+the interface pulls itself in; for a solid they differ, and only the stress drives
+shape change. The tissue as modelled is a solid.
+
+The practical consequence is that an \emph{emergent} surface tension requires a
+change of rheology---neighbour exchange, cell deformability, or persistent active
+motility---not a change of force law, and that $\gamma_{\text{stress}}$ rising to
+meet $\gamma_{\text{energy}}$ is the criterion for having achieved it.
+
 \section{Verification and validation}\label{sec:vv}
 
 CellFlow ships an automated test suite (266 tests) including:
@@ -661,43 +833,45 @@ quantitative study, and physical units must be assigned by the user.
   \item Results are in arbitrary units unless the user assigns a unit system.
 \end{itemize}
 
-\paragraph{Cell-scale surface tension bounds interfacial patterning.}
-This one is worth stating explicitly because it constrains a whole class of
-studies. In a soft-particle model the effective surface tension originates in
-cell-scale sterics (repulsion plus the overlap re-rounding projection), so the
-capillary length $d_0$ cannot fall far below one cell radius $a$. Measured via
-$d_0\sim R/k_0^2$ (Section~\ref{sec:front}), it is $3$--$8\,a$ across the regimes
-tested, and it is \emph{larger} when the colony advances by proliferation than
-when cells merely swell. Combined with $k^\ast\sim\sqrt{R/d_0}$, the number of
-fingers a colony can support grows only as the square root of its radius:
+\paragraph{Interfacial patterning: what actually bounds it.}
+This is worth stating explicitly because it constrains a whole class of studies,
+and because an earlier version of this section was wrong in a way that mattered.
+
+\emph{Withdrawn.} Previous editions gave a capillary length $d_0\sim R/k_0^2$ of
+$3$--$8$ cell radii, a scaling $k^\ast\sim\sqrt{R/d_0}$, and a resulting estimate
+of $10^5$--$10^7$ cells to resolve a branched morphology. The scaling law omitted
+the nutrient diffusion length; measured over four sweeps it is
+$k_0 \propto R/\sqrt{a\ell}$, the geometric mean of cell radius and diffusion
+length, which lowered the cell-count estimate by about an order of magnitude. The
+$10^5$--$10^7$ figure should not be cited.
+
+\emph{What replaced it.} The binding constraint is not band width but the
+\emph{shape} of the dispersion relation. Varying only the expansion rate---basal
+metabolism slows net growth while leaving the nutrient field untouched---gives
+both coefficients scaling together, with their ratios constant to $0.7\%$:
 \begin{equation}
-  k^\ast \sim \sqrt{R/d_0} \;\lesssim\; \sqrt{R/3a}.
+  \lambda(k) \;\approx\; \frac{\dot R}{R}\,\bigl[\,10 - 0.6\,k\,\bigr] .
 \end{equation}
-Resolving a strongly branched morphology ($k^\ast\sim 10$--$30$) therefore
-requires $10^5$--$10^7$ cells. Interfacial instabilities are not forbidden in this
-model class, but at accessible colony sizes only the longest-wavelength modes
-($k\lesssim 5$) are unstable, which produces a lumpy or elongated colony rather
-than fingers. See \texttt{docs/giverso\_replication.md} for the measurements.
+The marginal mode $k_0=\lambda_0/c\approx 16.7$ is therefore a \emph{pure
+number}, independent of growth rate. Mullins--Sekerka is
+$\lambda = Vk - \Gamma k^3$, in which the front velocity multiplies only the
+destabilising term while $\Gamma$ is a material property; that asymmetry is what
+selects a wavelength, $k^\ast=\sqrt{V/3\Gamma}$. The model as originally
+formulated had no growth-rate-independent term at all, which is why four
+independent parameters---nutrient level, growth rate, colony size and substrate
+drag---each change the rate and leave the shape alone.
 
-\paragraph{Growth-driven expansion.} The volumetric source
-(Section~\ref{sec:growthsource}) carries three caveats: the source mean is
-subtracted (a uniform far-field drain, accurate only while the colony is small
-compared with the box); it is applied with a one-step lag; and it double-counts
-expansion against the overlap projection unless
-\texttt{overlap\_iterations} or \texttt{growth\_source\_strength} is reduced.
-Growth-driven flow can also be fast enough to violate the advective CFL condition
---- check the reported CFL when enabling it.
+\emph{Current status.} The capillary term now exists
+(Section~\ref{sec:surften}): raising $\sigma$ collapses $k_0$ from $14.4$ to
+$4.2$ and roughly doubles the Mullins--Sekerka fit quality, confirming a genuine
+$-\Gamma k^3$ cutoff. It moves $k^\ast$ \emph{down}, however, as
+$k^\ast=\sqrt{V/3\Gamma}$ requires. The outstanding gap is therefore a
+destabilising term that \emph{grows} with $k$; the model's is $k$-independent
+(the geometric instability of any expanding circle). Note also that the fluid
+velocity law suppresses force response by $1+(k\delta)^2$
+(Section~\ref{sec:motion}), which acts directly against such a term.
 
-\begin{thebibliography}{9}
-\bibitem{cortez} R.~Cortez, \emph{The method of regularized Stokeslets},
-  SIAM J. Sci. Comput. 23 (2001) 1204--1225.
-\bibitem{peskin} C.~S.~Peskin, \emph{The immersed boundary method},
-  Acta Numerica 11 (2002) 479--517.
-\bibitem{brinkman} H.~C.~Brinkman, \emph{A calculation of the viscous force
-  exerted by a flowing fluid on a dense swarm of particles},
-  Appl. Sci. Res. A1 (1949) 27--34.
-\bibitem{steinberg} M.~S.~Steinberg, \emph{Differential adhesion in
-  morphogenesis}, Curr. Opin. Genet. Dev. 17 (2007) 281--286.
-\end{thebibliography}
+See \texttt{docs/giverso\_replication.md} for the measurements and their
+retraction history.
 
 \end{document}
