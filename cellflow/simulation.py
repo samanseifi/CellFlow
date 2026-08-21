@@ -669,7 +669,17 @@ class CellSimulation:
         #    solved field (computed here); the legacy Stokeslet path computes
         #    cell velocities separately in step 8.
         precomputed_cell_velocities = None
-        if self.fluid_model == 'brinkman_fft':
+        # Under the friction velocity law the solved flow field is not used for
+        # cell motion, only for scalar advection -- and advecting by a Stokes
+        # field is inconsistent with a picture in which cells crawl on a
+        # substrate and momentum travels through contacts rather than the medium.
+        # So the (expensive) Brinkman solve is skipped by default there; set
+        # `fluid_advection: True` to keep it. Measured at 23% of step cost.
+        _skip_fluid = (self.velocity_model == 'friction'
+                       and not self.config.get('fluid_advection', False))
+        if _skip_fluid:
+            self.fluid_velocity[:] = 0.0
+        elif self.fluid_model == 'brinkman_fft':
             sigmas = self.ibm_reg_factor * radii   # physical regularization width
             if recompute_fluid:                    # multi-timescale: skip the
                 force_density = spread_forces_blob_numba(   # expensive solve between

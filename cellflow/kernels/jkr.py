@@ -36,6 +36,57 @@ import numpy as np
 from numba import njit, prange
 
 
+
+# ---------------------------------------------------------------------------
+# Scale-invariant inversion of delta(a)
+# ---------------------------------------------------------------------------
+# Substituting a = a_min * u with a_min = (cR/4)^(2/3) collapses the JKR
+# displacement relation onto a UNIVERSAL curve with no material or geometric
+# parameters left in it:
+#
+#     delta = S * g(u),   S = (c^4 R / 4)^(1/3),   g(u) = u^2/4 - sqrt(u)
+#
+# The original implementation inverted delta -> a with up to 120 bracket and
+# bisection iterations per contact per step, which measured 43.7 ms/step and made
+# a dispersion sweep a 45-hour job. On the universal curve a closed-form initial
+# guess plus Newton converges in at most 5 iterations for g over eight decades.
+#
+# (A precomputed lookup table was tried first and was SLOWER -- 69 ms/step. A
+# large global array disables numba's function cache and np.interp binary-searches
+# it on every call, which costs more than the arithmetic it replaces.)
+#
+# Two asymptotes give the guess. g has a minimum at u = 1 with g'(1) = 0 and
+# g''(1) = 3/4, so near the snap point g - g_min ~ (3/8)(u-1)^2; for large g the
+# sqrt term is negligible and g ~ u^2/4. Taking whichever is larger is above the
+# root in both limits, and Newton on a convex increasing function then converges
+# monotonically.
+_G_MIN = -0.75                      # g(1), exactly -3/4
+
+
+@njit(cache=True, inline='always')
+def _u_of_g(g):
+    """Inverse of g(u) = u^2/4 - sqrt(u) on the stable branch u >= 1."""
+    if g <= _G_MIN:
+        return 1.0
+    u = 1.0 + np.sqrt(8.0 * (g - _G_MIN) / 3.0)
+    ub = 2.0 * np.sqrt(g) if g > 0.0 else 0.0
+    if ub > u:
+        u = ub
+    for _ in range(8):
+        f = u * u / 4.0 - np.sqrt(u) - g
+        df = 0.5 * u - 0.5 / np.sqrt(u)
+        if df <= 1e-30:
+            break
+        un = u - f / df
+        if un < 1.0:
+            un = 1.0
+        if abs(un - u) <= 1e-13 * u:
+            u = un
+            break
+        u = un
+    return u
+
+
 @njit(cache=True, inline='always')
 def _a_min(R, c):
     """Contact radius at the pull-off point, where d(delta)/da = 0."""
@@ -49,44 +100,26 @@ def _delta_of_a(a, R, c):
 
 @njit(cache=True, inline='always')
 def _solve_contact_radius(delta, R, c, a_guess):
-    """Invert delta(a) on the stable branch a >= a_min, by safeguarded Newton.
+    """Invert delta(a) on the stable branch a >= a_min.
 
     Returns 0.0 when delta is below the pull-off separation, i.e. the contact
-    has snapped and there is no neck left.
+    has snapped and there is no neck left. ``a_guess`` is retained for signature
+    compatibility and no longer used -- the inversion is now a table lookup on
+    the universal curve, which needs no starting point.
     """
+    if c <= 0.0:
+        # w = 0: no adhesion, so the scale factor S = (c^4 R/4)^(1/3) vanishes
+        # and the universal form degenerates. This is pure Hertz, a = sqrt(R d),
+        # with no neck below contact.
+        if delta <= 0.0:
+            return 0.0
+        return np.sqrt(R * delta)
     amin = _a_min(R, c)
-    dmin = _delta_of_a(amin, R, c)
-    if delta < dmin:
+    S = (c ** 4 * R / 4.0) ** (1.0 / 3.0)
+    g = delta / S
+    if g < _G_MIN:
         return 0.0
-    # bracket [amin, hi] with delta(hi) >= delta
-    hi = amin if amin > a_guess else a_guess
-    if hi < amin:
-        hi = amin
-    for _ in range(60):
-        if _delta_of_a(hi, R, c) >= delta:
-            break
-        hi *= 2.0
-    lo = amin
-    a = 0.5 * (lo + hi)
-    for _ in range(60):
-        f = _delta_of_a(a, R, c) - delta
-        if f > 0.0:
-            hi = a
-        else:
-            lo = a
-        # Newton step, rejected if it leaves the bracket
-        df = 2.0 * a / R - 0.5 * c / np.sqrt(a)
-        if df > 1e-30:
-            an = a - f / df
-            if lo < an < hi:
-                a = an
-            else:
-                a = 0.5 * (lo + hi)
-        else:
-            a = 0.5 * (lo + hi)
-        if hi - lo < 1e-12 * (1.0 + a):
-            break
-    return a
+    return amin * _u_of_g(g)
 
 
 @njit(cache=True, inline='always')

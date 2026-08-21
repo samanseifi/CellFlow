@@ -352,11 +352,16 @@ COMBINED = dict(
     velocity_model='friction', friction_substrate=2.5, friction_cell_cell=0.5,
     contact_model='jkr', jkr_modulus=40.0, jkr_work_adhesion=4.0,
     overlap_iterations=0, surface_tension=0.0,
+    # Radius polydispersity, not jitter, is what sets the JKR timestep here: the
+    # equilibrium spacing is computed for one radius while U(50,100) spans 1.41x.
+    # Narrowing to U(75,100) leaves division desynchronised and raises the stable
+    # dt from 6.8e-4 to 4.3e-3.
+    async_lo=75.0, async_hi=100.0,
     spacing_factor=None,          # filled below from the JKR equilibrium
     # dt from the measured JKR stability bound on the SEEDED, jittered
     # packing (4.7e-4), not on an ideal lattice -- the perturbation and
     # jitter both stiffen the contacts.
-    dt=0.0002, steps=175000, sample_every=7000,
+    dt=0.001, steps=35000, sample_every=1500,
 )
 _d_eq = jkr_equilibrium_overlap(0.5 * COMBINED['cell_r'],
                                 COMBINED['jkr_modulus'],
@@ -421,7 +426,11 @@ def seeded_colony(regime, mode, rng):
 
     Cell-cycle phase. With ``async_phase`` set, each cell's stored nutrient is
     drawn uniformly over ONE division cycle instead of all cells starting
-    identical. Under area-conserving growth a cell divides at n = 100 and each
+    identical. The band is settable via ``async_lo``/``async_hi``: the full
+    U(50,100) spans a 1.41x spread in radius, and under JKR that polydispersity
+    is what sets the timestep, since a single equilibrium spacing cannot suit
+    every pair. Narrowing to U(75,100) keeps division desynchronised at a 1.15x
+    spread and buys a factor of 6 in the stable timestep. Under area-conserving growth a cell divides at n = 100 and each
     daughter restarts at n = 50, so U(50, 100) is exactly the phase distribution
     of a population in steady asynchronous growth. This matters because with
     identical cells the colony divides in synchronized bursts -- which is itself
@@ -459,7 +468,8 @@ def seeded_colony(regime, mode, rng):
                     cell.max_radius = float(regime['max_radius'])
                     cell.min_radius = 0.5 * cell.max_radius
                 if async_phase:
-                    nut = rng.uniform(50.0, 100.0)
+                    nut = rng.uniform(regime.get('async_lo', 50.0),
+                                      regime.get('async_hi', 100.0))
                 else:
                     nut = 100.0 * (cell_r / cell.max_radius) ** 2
                 cell.nutrient_accumulated = nut
